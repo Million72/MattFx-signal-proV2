@@ -2,104 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  * {
-    @apply border-slate-800;
-  }
-  
-  body {
-    @apply bg-slate-950 text-slate-100;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  }
-
-  /* Custom Scrollbar */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-
-  ::-webkit-scrollbar-track {
-    @apply bg-slate-900;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    @apply bg-slate-700 rounded-full hover:bg-slate-600;
-  }
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #020617;
+  color: #f1f5f9;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
 
-@layer components {
-  .glass-card {
-    @apply bg-slate-900/80 backdrop-blur-xl border border-slate-800/50 rounded-2xl shadow-2xl;
-  }
+.glass-card {
+  background: rgba(15, 23, 42, 0.8);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 1rem;
+}
 
-  .glass-card-hover {
-    @apply glass-card transition-all duration-300 hover:border-slate-700/50 hover:shadow-slate-900/50 hover:scale-[1.02];
-  }
+.btn-primary {
+  padding: 0.75rem 2rem;
+  background: linear-gradient(135deg, #2563eb, #059669);
+  color: white;
+  font-weight: 600;
+  border-radius: 0.75rem;
+  transition: all 0.3s;
+}
 
-  .gradient-text {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400;
-  }
-
-  .gradient-text-gold {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-amber-400 to-yellow-400;
-  }
-
-  .btn-primary {
-    @apply px-6 py-2.5 bg-gradient-to-r from-blue-600 to-emerald-600 text-white font-semibold rounded-xl
-           hover:from-blue-500 hover:to-emerald-500 transition-all duration-300 
-           shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40
-           active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
-  }
-
-  .btn-secondary {
-    @apply px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-xl
-           border border-slate-700 hover:border-slate-600 transition-all duration-300
-           active:scale-95;
-  }
-
-  .signal-badge-buy {
-    @apply px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full
-           font-semibold text-sm flex items-center gap-1.5;
-  }
-
-  .signal-badge-sell {
-    @apply px-3 py-1 bg-red-500/10 text-red-400 border border-red-500/20 rounded-full
-           font-semibold text-sm flex items-center gap-1.5;
-  }
-
-  .signal-badge-neutral {
-    @apply px-3 py-1 bg-slate-500/10 text-slate-400 border border-slate-500/20 rounded-full
-           font-semibold text-sm flex items-center gap-1.5;
-  }
-
-  .metric-card {
-    @apply glass-card p-4 hover:scale-105 transition-transform duration-300;
-  }
-
-  .animate-glow {
-    animation: glow 2s ease-in-out infinite alternate;
-  }
-
-  @keyframes glow {
-    from {
-      box-shadow: 0 0 20px -10px rgba(59, 130, 246, 0.5);
-    }
-    to {
-      box-shadow: 0 0 30px -5px rgba(59, 130, 246, 0.8);
-    }
-  }
-
-  .pulse-dot {
-    @apply w-2 h-2 rounded-full bg-emerald-400;
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.5;
-    }
-  }
-    }
+.btn-primary:hover {
+  transform: scale(1.05);
+  box-shadow: 0 10px 30px rgba(37, 99, 235, 0.3);
+}
