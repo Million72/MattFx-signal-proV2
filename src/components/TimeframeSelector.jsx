@@ -1,28 +1,27 @@
-import React from 'react';
-import { Clock } from 'lucide-react';
-import { TIMEFRAMES } from '../constants/timeframes';
-import clsx from 'clsx';
+import React from 'react'
+import { TIMEFRAMES } from '../constants/timeframes.js'
+import { COLORS } from '../constants/colors.js'
 
-export default function TimeframeSelector({ selected, onChange }) {
+export default function TimeframeSelector({ timeframe, onChange }) {
   return (
-    <div className="flex items-center gap-2">
-      <Clock className="w-4 h-4 text-slate-400" />
-      <div className="flex bg-slate-800 rounded-lg p-1">
-        {TIMEFRAMES.map(tf => (
-          <button
-            key={tf.value}
-            onClick={() => onChange(tf.value)}
-            className={clsx(
-              "px-3 py-1.5 rounded-md text-xs font-medium transition-all",
-              selected === tf.value
-                ? "bg-blue-600 text-white shadow-lg"
-                : "text-slate-400 hover:text-white"
-            )}
-          >
-            {tf.label}
-          </button>
-        ))}
-      </div>
+    <div style={{
+      display: 'flex', gap: 4, background: COLORS.bgAlt,
+      borderRadius: 12, padding: 4, flexWrap: 'wrap', justifyContent: 'center'
+    }}>
+      {TIMEFRAMES.map((tf) => (
+        <button
+          key={tf.value}
+          onClick={() => onChange(tf.value)}
+          style={{
+            padding: '8px 16px', borderRadius: 8, border: 'none',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            background: timeframe === tf.value ? COLORS.accentBlue : 'transparent',
+            color: timeframe === tf.value ? '#fff' : COLORS.textDim
+          }}
+        >
+          {tf.label}
+        </button>
+      ))}
     </div>
-  );
+  )
 }
