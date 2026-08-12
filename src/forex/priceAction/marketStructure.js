@@ -1,82 +1,53 @@
-export async function marketStructureAnalysis(highs, lows, closes) {
-  const swingHighs = findSwingPoints(highs, 'high');
-  const swingLows = findSwingPoints(lows, 'low');
-  
-  const structure = {
-    highs: swingHighs.slice(-5),
-    lows: swingLows.slice(-5),
-    trend: 'NEUTRAL',
-    pattern: 'NONE',
-    quality: 'LOW',
-  };
+// Detects swing highs and swing lows using a fractal (N-bar pivot) method.
+// A swing high at index i means highs[i] is higher than `strength` bars
+// on both sides; symmetric for swing lows.
 
-  if (swingHighs.length >= 2 && swingLows.length >= 2) {
-    const recentHighs = swingHighs.slice(-2);
-    const recentLows = swingLows.slice(-2);
-    
-    // Determine market structure
-    const higherHigh = recentHighs[1].price > recentHighs[0].price;
-    const higherLow = recentLows[1].price > recentLows[0].price;
-    const lowerHigh = recentHighs[1].price < recentHighs[0].price;
-    const lowerLow = recentLows[1].price < recentLows[0].price;
+export function findSwingPoints(highs, lows, strength = 3) {
+  const swingHighs = []
+  const swingLows = []
 
-    if (higherHigh && higherLow) {
-      structure.trend = 'BULLISH';
-      structure.pattern = 'HH_HL';
-      structure.quality = 'HIGH';
-    } else if (lowerHigh && lowerLow) {
-      structure.trend = 'BEARISH';
-      structure.pattern = 'LH_LL';
-      structure.quality = 'HIGH';
-    } else if (higherHigh && !higherLow) {
-      structure.trend = 'WEAK_BULLISH';
-      structure.pattern = 'HH_LL';
-      structure.quality = 'MEDIUM';
-    } else if (lowerHigh && !lowerLow) {
-      structure.trend = 'WEAK_BEARISH';
-      structure.pattern = 'LH_HL';
-      structure.quality = 'MEDIUM';
+  for (let i = strength; i < highs.length - strength; i++) {
+    let isHigh = true
+    let isLow = true
+
+    for (let j = 1; j <= strength; j++) {
+      if (highs[i] <= highs[i - j] || highs[i] <= highs[i + j]) isHigh = false
+      if (lows[i] >= lows[i - j] || lows[i] >= lows[i + j]) isLow = false
     }
+
+    if (isHigh) swingHighs.push({ index: i, price: highs[i] })
+    if (isLow) swingLows.push({ index: i, price: lows[i] })
   }
 
-  const currentPrice = closes[closes.length - 1];
-  const nearestHigh = findNearestLevel(swingHighs, currentPrice, 'above');
-  const nearestLow = findNearestLevel(swingLows, currentPrice, 'below');
+  return { swingHighs, swingLows }
+}
+
+export function nearestSwingLevels(highs, lows, currentIndex, strength = 3) {
+  const { swingHighs, swingLows } = findSwingPoints(highs, lows, strength)
+  const priorHighs = swingHighs.filter((s) => s.index < currentIndex)
+  const priorLows = swingLows.filter((s) => s.index < currentIndex)
 
   return {
-    ...structure,
-    nearestHigh: nearestHigh?.price,
-    nearestLow: nearestLow?.price,
-    distanceToHigh: nearestHigh ? ((nearestHigh.price - currentPrice) / currentPrice) * 100 : null,
-    distanceToLow: nearestLow ? ((currentPrice - nearestLow.price) / currentPrice) * 100 : null,
-  };
+    nearestSwingHigh: priorHighs.length ? priorHighs[priorHighs.length - 1].price : null,
+    nearestSwingLow: priorLows.length ? priorLows[priorLows.length - 1].price : null
+  }
 }
 
-function findSwingPoints(prices, type, lookback = 3) {
-  const points = [];
-  
-  for (let i = lookback; i < prices.length - lookback; i++) {
-    const slice = prices.slice(i - lookback, i + lookback + 1);
-    const current = prices[i];
-    
-    if (type === 'high' && current === Math.max(...slice)) {
-      points.push({ index: i, price: current });
-    } else if (type === 'low' && current === Math.min(...slice)) {
-      points.push({ index: i, price: current });
-    }
-  }
-  
-  return points;
-}
+// Determines overall structure bias from the sequence of recent swings:
+// higher highs + higher lows = bullish structure, and vice versa.
+export function structureBias(swingHighs, swingLows) {
+  if (swingHighs.length < 2 || swingLows.length < 2) return 'NEUTRAL'
 
-function findNearestLevel(levels, currentPrice, direction) {
-  if (!levels.length) return null;
+  const lastTwoHighs = swingHighs.slice(-2)
+  const lastTwoLows = swingLows.slice(-2)
+
+  const higherHighs = lastTwoHighs[1].price > lastTwoHighs[0].price
+  const higherLows = lastTwoLows[1].price > lastTwoLows[0].price
+  const lowerHighs = lastTwoHighs[1].price < lastTwoHighs[0].price
+  const lowerLows = lastTwoLows[1].price < lastTwoLows[0].price
+
+  if (higherHighs && higherLows) return 'BULLISH'
+  if (lowerHighs && lowerLows) return 'BEARISH'
+  return 'NEUTRAL'
+}
   
-  if (direction === 'above') {
-    const above = levels.filter(l => l.price > currentPrice);
-    return above.length ? above.reduce((a, b) => a.price < b.price ? a : b) : null;
-  } else {
-    const below = levels.filter(l => l.price < currentPrice);
-    return below.length ? below.reduce((a, b) => a.price > b.price ? a : b) : null;
-  }
-  }
