@@ -1,112 +1,58 @@
+// Portfolio-level guardrails that sit above individual signal quality.
+// A single signal can be perfect and still be a bad idea to take if
+// it violates portfolio-level risk rules (too many correlated positions,
+// re-signaling the same symbol too soon, etc).
+
+const MAX_CONCURRENT_SIGNALS = 5
+const SYMBOL_COOLDOWN_MS = 15 * 60 * 1000 // don't re-signal the same symbol within 15 min
+const MAX_SAME_DIRECTION_CORRELATED = 3 // cap on correlated same-direction positions
+
 export class RiskManager {
-  constructor(config = {}) {
-    this.config = {
-      maxRiskPerTrade: 2, // 2% of account
-      maxDailyRisk: 6,    // 6% daily max
-      maxOpenTrades: 5,
-      minRiskRewardRatio: 1.5,
-      maxCorrelationExposure: 3,
-      ...config,
-    };
-
-    this.openTrades = [];
-    this.dailyPnL = 0;
-    this.dailyRiskUsed = 0;
+  constructor() {
+    this.activeSignals = new Map() // symbol -> { direction, timestamp }
   }
 
-  canOpenTrade(trade, accountBalance) {
-    // Check number of open trades
-    if (this.openTrades.length >= this.config.maxOpenTrades) {
-      return { allowed: false, reason: 'Maximum open trades reached' };
+  canAcceptSignal(candidate) {
+    const reasons = []
+
+    if (this.activeSignals.size >= MAX_CONCURRENT_SIGNALS) {
+      reasons.push('max_concurrent_signals_reached')
     }
 
-    // Check risk per trade
-    const riskAmount = Math.abs(trade.entry - trade.stopLoss) * trade.positionSize;
-    const riskPercent = (riskAmount / accountBalance) * 100;
-
-    if (riskPercent > this.config.maxRiskPerTrade) {
-      return { allowed: false, reason: `Risk per trade (${riskPercent.toFixed(1)}%) exceeds maximum (${this.config.maxRiskPerTrade}%)` };
+    const existing = this.activeSignals.get(candidate.symbol)
+    if (existing && Date.now() - existing.timestamp < SYMBOL_COOLDOWN_MS) {
+      reasons.push('symbol_on_cooldown')
     }
 
-    // Check daily risk
-    if ((this.dailyRiskUsed + riskPercent) > this.config.maxDailyRisk) {
-      return { allowed: false, reason: 'Daily risk limit would be exceeded' };
+    const sameDirectionCount = [...this.activeSignals.values()].filter(
+      (s) => s.direction === candidate.direction
+    ).length
+    if (sameDirectionCount >= MAX_SAME_DIRECTION_CORRELATED) {
+      reasons.push('too_many_correlated_positions')
     }
 
-    // Check risk/reward ratio
-    const reward = Math.abs(trade.takeProfit - trade.entry);
-    const rr = reward / riskAmount;
+    return { accepted: reasons.length === 0, reasons }
+  }
 
-    if (rr < this.config.minRiskRewardRatio) {
-      return { allowed: false, reason: `Risk/Reward ratio (1:${rr.toFixed(2)}) below minimum (1:${this.config.minRiskRewardRatio})` };
+  register(candidate) {
+    this.activeSignals.set(candidate.symbol, {
+      direction: candidate.direction,
+      timestamp: Date.now()
+    })
+  }
+
+  expireOld(maxAgeMs = 4 * 60 * 60 * 1000) {
+    const now = Date.now()
+    for (const [symbol, data] of this.activeSignals.entries()) {
+      if (now - data.timestamp > maxAgeMs) {
+        this.activeSignals.delete(symbol)
+      }
     }
-
-    // Check correlation exposure
-    const correlatedTrades = this.getCorrelatedTrades(trade.symbol);
-    if (correlatedTrades.length >= this.config.maxCorrelationExposure) {
-      return { allowed: false, reason: 'Maximum correlation exposure reached' };
-    }
-
-    return { allowed: true };
   }
 
-  addTrade(trade) {
-    this.openTrades.push({
-      ...trade,
-      openedAt: Date.now(),
-      riskAmount: Math.abs(trade.entry - trade.stopLoss) * trade.positionSize,
-    });
-
-    this.dailyRiskUsed += (trade.riskAmount / trade.accountBalance) * 100;
+  reset() {
+    this.activeSignals.clear()
   }
+}
 
-  closeTrade(tradeId, exitPrice, pnl) {
-    const tradeIndex = this.openTrades.findIndex(t => t.id === tradeId);
-    
-    if (tradeIndex !== -1) {
-      const trade = this.openTrades[tradeIndex];
-      this.openTrades.splice(tradeIndex, 1);
-      this.dailyPnL += pnl;
-      
-      return {
-        trade,
-        pnl,
-        holdingPeriod: Date.now() - trade.openedAt,
-        win: pnl > 0,
-      };
-    }
-
-    return null;
-  }
-
-  getCorrelatedTrades(symbol) {
-    const correlationGroups = {
-      'EURUSD': ['GBPUSD', 'EURGBP', 'EURJPY'],
-      'GBPUSD': ['EURUSD', 'EURGBP', 'GBPJPY'],
-      'USDJPY': ['EURJPY', 'GBPJPY', 'AUDJPY'],
-    };
-
-    const correlatedSymbols = correlationGroups[symbol] || [];
-    return this.openTrades.filter(t => correlatedSymbols.includes(t.symbol));
-  }
-
-  calculatePositionSize(accountBalance, riskPercent, stopLossPips, pipValue = 10) {
-    const riskAmount = accountBalance * (riskPercent / 100);
-    return riskAmount / (stopLossPips * pipValue);
-  }
-
-  getDailyStats() {
-    return {
-      openTrades: this.openTrades.length,
-      dailyPnL: this.dailyPnL,
-      dailyRiskUsed: this.dailyRiskUsed,
-      remainingRisk: this.config.maxDailyRisk - this.dailyRiskUsed,
-      remainingTrades: this.config.maxOpenTrades - this.openTrades.length,
-    };
-  }
-
-  resetDaily() {
-    this.dailyPnL = 0;
-    this.dailyRiskUsed = 0;
-  }
-                                                                  }
+export const riskManager = new RiskManager()
