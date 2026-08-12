@@ -1,27 +1,29 @@
-export function sessionFilter(symbol, timeframe) {
-  // Get current time in different sessions
-  const now = new Date();
-  const utcHour = now.getUTCHours();
-  const dayOfWeek = now.getUTCDay();
+import { FOREX_SESSIONS } from '../../constants/markets.js'
 
-  // Skip weekends
-  if (dayOfWeek === 0 || dayOfWeek === 6) return false;
+function isWithinUtcWindow(hour, start, end) {
+  if (start < end) return hour >= start && hour < end
+  // Window wraps midnight (e.g. Sydney 21 -> 6)
+  return hour >= start || hour < end
+}
 
-  // Determine current session
-  const asianSession = utcHour >= 0 && utcHour < 9;
-  const londonSession = utcHour >= 8 && utcHour < 17;
-  const newYorkSession = utcHour >= 13 && utcHour < 22;
+// Forex synthetic-free filter: avoids the low-liquidity dead zone
+// between NY close and Sydney open where spreads widen and moves are
+// unreliable. Synthetic indices trade 24/7 with no sessions and should
+// skip this filter entirely (handled by the caller).
+export function sessionFilter(timestampMs = Date.now()) {
+  const hourUtc = new Date(timestampMs).getUTCHours()
 
-  // Filter based on symbol and session
-  const asianPairs = ['USDJPY', 'AUDUSD', 'NZDUSD', 'AUDJPY'];
-  const londonPairs = ['EURUSD', 'GBPUSD', 'EURGBP', 'EURJPY', 'GBPJPY'];
-  const nyPairs = ['EURUSD', 'GBPUSD', 'USDCAD', 'USDCHF'];
+  const activeSessions = Object.entries(FOREX_SESSIONS)
+    .filter(([, window]) => isWithinUtcWindow(hourUtc, window.start, window.end))
+    .map(([name]) => name)
 
-  if (asianSession && !asianPairs.includes(symbol)) return false;
-  if (londonSession && !londonPairs.includes(symbol) && !asianPairs.includes(symbol)) return false;
+  // London/NY overlap (12:00-16:00 UTC) is the highest-liquidity window
+  const isOverlap = activeSessions.includes('london') && activeSessions.includes('newYork')
 
-  // Avoid low liquidity periods
-  if (utcHour >= 22 || utcHour < 1) return false;
-
-  return true;
+  return {
+    hourUtc,
+    activeSessions,
+    isOverlap,
+    passed: activeSessions.length > 0
+  }
 }
