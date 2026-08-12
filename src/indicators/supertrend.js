@@ -1,110 +1,52 @@
-import { ATR } from './atr';
+import { calculateATRSeries } from './atr.js'
 
-export class Supertrend {
-  constructor(period = 10, multiplier = 3) {
-    this.period = period;
-    this.multiplier = multiplier;
-    this.values = [];
-    this.trend = [];
+// Returns { trend: 'UP'|'DOWN' series, line: numeric series }
+export function calculateSuperTrend(highs, lows, closes, period = 10, multiplier = 3) {
+  const n = closes.length
+  const atr = calculateATRSeries(highs, lows, closes, period)
+
+  const upperBasic = new Array(n)
+  const lowerBasic = new Array(n)
+  for (let i = 0; i < n; i++) {
+    const hl2 = (highs[i] + lows[i]) / 2
+    upperBasic[i] = hl2 + multiplier * atr[i]
+    lowerBasic[i] = hl2 - multiplier * atr[i]
   }
 
-  calculate(highs, lows, closes) {
-    if (highs.length < this.period) return [];
+  const upperFinal = new Array(n).fill(0)
+  const lowerFinal = new Array(n).fill(0)
+  const trend = new Array(n).fill('UP')
+  const line = new Array(n).fill(0)
 
-    const atr = new ATR(this.period);
-    const atrValues = atr.calculate(highs, lows, closes);
-    
-    const hl2 = highs.map((high, i) => (high + lows[i]) / 2);
-    
-    this.values = [];
-    this.trend = [];
-    
-    let upperBand = [];
-    let lowerBand = [];
-    let trend = 1; // 1 = bullish, -1 = bearish
+  upperFinal[0] = upperBasic[0]
+  lowerFinal[0] = lowerBasic[0]
+  trend[0] = closes[0] > upperBasic[0] ? 'UP' : 'DOWN'
+  line[0] = trend[0] === 'UP' ? lowerFinal[0] : upperFinal[0]
 
-    for (let i = 0; i < highs.length; i++) {
-      if (i < this.period) {
-        this.values.push(hl2[i]);
-        this.trend.push(1);
-        continue;
-      }
+  for (let i = 1; i < n; i++) {
+    upperFinal[i] = (upperBasic[i] < upperFinal[i - 1] || closes[i - 1] > upperFinal[i - 1])
+      ? upperBasic[i] : upperFinal[i - 1]
 
-      const atrValue = atrValues[i - this.period] || atrValues[atrValues.length - 1];
-      
-      const basicUpperBand = hl2[i] + (this.multiplier * atrValue);
-      const basicLowerBand = hl2[i] - (this.multiplier * atrValue);
-      
-      // Adjust bands
-      if (i === this.period) {
-        upperBand.push(basicUpperBand);
-        lowerBand.push(basicLowerBand);
-      } else {
-        upperBand.push(
-          basicUpperBand < upperBand[i - 1] || closes[i - 1] > upperBand[i - 1]
-            ? basicUpperBand
-            : upperBand[i - 1]
-        );
-        
-        lowerBand.push(
-          basicLowerBand > lowerBand[i - 1] || closes[i - 1] < lowerBand[i - 1]
-            ? basicLowerBand
-            : lowerBand[i - 1]
-        );
-      }
+    lowerFinal[i] = (lowerBasic[i] > lowerFinal[i - 1] || closes[i - 1] < lowerFinal[i - 1])
+      ? lowerBasic[i] : lowerFinal[i - 1]
 
-      // Determine trend
-      if (trend === 1) {
-        if (closes[i] <= lowerBand[i]) {
-          trend = -1;
-          this.values.push(upperBand[i]);
-        } else {
-          this.values.push(
-            lowerBand[i] > lowerBand[i - 1] ? lowerBand[i] : lowerBand[i - 1]
-          );
-        }
-      } else {
-        if (closes[i] >= upperBand[i]) {
-          trend = 1;
-          this.values.push(lowerBand[i]);
-        } else {
-          this.values.push(
-            upperBand[i] < upperBand[i - 1] ? upperBand[i] : upperBand[i - 1]
-          );
-        }
-      }
-      
-      this.trend.push(trend);
+    if (trend[i - 1] === 'UP') {
+      trend[i] = closes[i] < lowerFinal[i] ? 'DOWN' : 'UP'
+    } else {
+      trend[i] = closes[i] > upperFinal[i] ? 'UP' : 'DOWN'
     }
 
-    return {
-      values: this.values,
-      trend: this.trend
-    };
+    line[i] = trend[i] === 'UP' ? lowerFinal[i] : upperFinal[i]
   }
 
-  getValue() {
-    return this.values[this.values.length - 1] || 0;
-  }
-
-  getTrend() {
-    const last = this.trend[this.trend.length - 1];
-    return last === 1 ? 'BULLISH' : last === -1 ? 'BEARISH' : 'NEUTRAL';
-  }
-
-  getSignal(close) {
-    if (this.values.length === 0) return null;
-    
-    const prevTrend = this.trend[this.trend.length - 2];
-    const currentTrend = this.trend[this.trend.length - 1];
-    
-    if (prevTrend === -1 && currentTrend === 1) return 'BUY';
-    if (prevTrend === 1 && currentTrend === -1) return 'SELL';
-    return null;
-  }
+  return { trend, line }
 }
 
-export function calculateSupertrend(highs, lows, closes, period = 10, multiplier = 3) {
-  const st = new Supertrend(period, multiplier);
-  return st.calculate(highs, lows, closes);
+export function superTrendFlipped(trendSeries) {
+  const n = trendSeries.length
+  if (n < 2) return null
+  if (trendSeries[n - 2] !== trendSeries[n - 1]) {
+    return trendSeries[n - 1] === 'UP' ? 'FLIPPED_BULLISH' : 'FLIPPED_BEARISH'
+  }
+  return null
 }
