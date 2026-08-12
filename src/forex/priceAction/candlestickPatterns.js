@@ -1,173 +1,43 @@
-export async function detectCandlestickPatterns(opens, highs, lows, closes) {
-  const patterns = [];
-  const last = closes.length - 1;
-  
-  if (last < 2) return { patterns: [], bullish: false, bearish: false };
+// Detects a small set of high-reliability candlestick patterns on the
+// most recent 1-3 candles. Kept deliberately small — pattern-matching
+// dozens of obscure candle shapes adds noise, not signal quality.
 
-  const candle = {
-    open: opens[last],
-    high: highs[last],
-    low: lows[last],
-    close: closes[last],
-    body: Math.abs(closes[last] - opens[last]),
-    upperWick: highs[last] - Math.max(opens[last], closes[last]),
-    lowerWick: Math.min(opens[last], closes[last]) - lows[last],
-    isBullish: closes[last] > opens[last],
-    isBearish: closes[last] < opens[last],
-  };
+function body(o, c) { return Math.abs(c - o) }
+function range(h, l) { return h - l }
+function upperWick(o, h, c) { return h - Math.max(o, c) }
+function lowerWick(o, l, c) { return Math.min(o, c) - l }
 
-  const prevCandle = {
-    open: opens[last - 1],
-    high: highs[last - 1],
-    low: lows[last - 1],
-    close: closes[last - 1],
-    body: Math.abs(closes[last - 1] - opens[last - 1]),
-    isBullish: closes[last - 1] > opens[last - 1],
-    isBearish: closes[last - 1] < opens[last - 1],
-  };
+export function detectCandlestickPattern(opens, highs, lows, closes) {
+  const n = closes.length
+  if (n < 3) return null
 
-  // Doji
-  if (candle.body <= (candle.high - candle.low) * 0.1) {
-    patterns.push({
-      name: 'DOJI',
-      type: 'NEUTRAL',
-      strength: 30,
-      description: 'Market indecision',
-    });
-  }
+  const o2 = opens[n - 1], h2 = highs[n - 1], l2 = lows[n - 1], c2 = closes[n - 1]
+  const o1 = opens[n - 2], h1 = highs[n - 2], l1 = lows[n - 2], c1 = closes[n - 2]
 
-  // Hammer
-  if (candle.lowerWick > candle.body * 2 && candle.upperWick < candle.body * 0.5) {
-    patterns.push({
-      name: 'HAMMER',
-      type: 'BULLISH',
-      strength: 65,
-      description: 'Potential bullish reversal',
-    });
-  }
+  const r2 = range(h2, l2)
+  if (r2 === 0) return null
 
-  // Shooting Star
-  if (candle.upperWick > candle.body * 2 && candle.lowerWick < candle.body * 0.5) {
-    patterns.push({
-      name: 'SHOOTING_STAR',
-      type: 'BEARISH',
-      strength: 65,
-      description: 'Potential bearish reversal',
-    });
-  }
+  const b2 = body(o2, c2)
+  const uw2 = upperWick(o2, h2, c2)
+  const lw2 = lowerWick(o2, l2, c2)
 
-  // Engulfing Bullish
-  if (candle.isBullish && prevCandle.isBearish && 
-      candle.open < prevCandle.close && candle.close > prevCandle.open) {
-    patterns.push({
-      name: 'BULLISH_ENGULFING',
-      type: 'BULLISH',
-      strength: 75,
-      description: 'Strong bullish reversal signal',
-    });
-  }
+  // Bullish/Bearish Engulfing
+  const bullEngulf = c1 < o1 && c2 > o2 && c2 >= o1 && o2 <= c1
+  const bearEngulf = c1 > o1 && c2 < o2 && c2 <= o1 && o2 >= c1
+  if (bullEngulf) return { type: 'ENGULFING', direction: 'BUY', source: 'candlestick' }
+  if (bearEngulf) return { type: 'ENGULFING', direction: 'SELL', source: 'candlestick' }
 
-  // Engulfing Bearish
-  if (candle.isBearish && prevCandle.isBullish && 
-      candle.open > prevCandle.close && candle.close < prevCandle.open) {
-    patterns.push({
-      name: 'BEARISH_ENGULFING',
-      type: 'BEARISH',
-      strength: 75,
-      description: 'Strong bearish reversal signal',
-    });
-  }
+  // Hammer (bullish) / Shooting Star (bearish): small body, long opposite wick
+  const isHammer = lw2 >= b2 * 2 && uw2 <= b2 * 0.5 && b2 / r2 < 0.4
+  const isShootingStar = uw2 >= b2 * 2 && lw2 <= b2 * 0.5 && b2 / r2 < 0.4
+  if (isHammer) return { type: 'HAMMER', direction: 'BUY', source: 'candlestick' }
+  if (isShootingStar) return { type: 'SHOOTING_STAR', direction: 'SELL', source: 'candlestick' }
 
-  // Morning Star (3-candle pattern)
-  if (last >= 2) {
-    const prevPrevCandle = {
-      close: closes[last - 2],
-      open: opens[last - 2],
-      isBearish: closes[last - 2] < opens[last - 2],
-    };
+  // Pin bar variants (similar to hammer/star but not requiring tiny body)
+  const bullPinBar = lw2 >= r2 * 0.6 && c2 > o2
+  const bearPinBar = uw2 >= r2 * 0.6 && c2 < o2
+  if (bullPinBar) return { type: 'PIN_BAR', direction: 'BUY', source: 'candlestick' }
+  if (bearPinBar) return { type: 'PIN_BAR', direction: 'SELL', source: 'candlestick' }
 
-    if (prevPrevCandle.isBearish && 
-        Math.abs(prevCandle.body) < Math.abs(prevPrevCandle.close - prevPrevCandle.open) * 0.3 &&
-        candle.isBullish && candle.close > (prevPrevCandle.open + prevPrevCandle.close) / 2) {
-      patterns.push({
-        name: 'MORNING_STAR',
-        type: 'BULLISH',
-        strength: 80,
-        description: 'Strong bullish reversal pattern',
-      });
+  return null
     }
-  }
-
-  // Three White Soldiers
-  if (last >= 2) {
-    const candle1 = { close: closes[last - 2], open: opens[last - 2] };
-    const candle2 = { close: closes[last - 1], open: opens[last - 1] };
-    
-    if (candle1.close > candle1.open && 
-        candle2.close > candle2.open && 
-        candle.close > candle.open &&
-        candle2.close > candle1.close && 
-        candle.close > candle2.close) {
-      patterns.push({
-        name: 'THREE_WHITE_SOLDIERS',
-        type: 'BULLISH',
-        strength: 85,
-        description: 'Strong bullish continuation',
-      });
-    }
-  }
-
-  // Three Black Crows
-  if (last >= 2) {
-    const candle1 = { close: closes[last - 2], open: opens[last - 2] };
-    const candle2 = { close: closes[last - 1], open: opens[last - 1] };
-    
-    if (candle1.close < candle1.open && 
-        candle2.close < candle2.open && 
-        candle.close < candle.open &&
-        candle2.close < candle1.close && 
-        candle.close < candle2.close) {
-      patterns.push({
-        name: 'THREE_BLACK_CROWS',
-        type: 'BEARISH',
-        strength: 85,
-        description: 'Strong bearish continuation',
-      });
-    }
-  }
-
-  // Piercing Pattern
-  if (prevCandle.isBearish && candle.isBullish &&
-      candle.open < prevCandle.low &&
-      candle.close > (prevCandle.open + prevCandle.close) / 2) {
-    patterns.push({
-      name: 'PIERCING_PATTERN',
-      type: 'BULLISH',
-      strength: 70,
-      description: 'Bullish reversal signal',
-    });
-  }
-
-  // Dark Cloud Cover
-  if (prevCandle.isBullish && candle.isBearish &&
-      candle.open > prevCandle.high &&
-      candle.close < (prevCandle.open + prevCandle.close) / 2) {
-    patterns.push({
-      name: 'DARK_CLOUD_COVER',
-      type: 'BEARISH',
-      strength: 70,
-      description: 'Bearish reversal signal',
-    });
-  }
-
-  const bullish = patterns.filter(p => p.type === 'BULLISH').length > 0;
-  const bearish = patterns.filter(p => p.type === 'BEARISH').length > 0;
-
-  return {
-    patterns,
-    bullish,
-    bearish,
-    strongestPattern: patterns.sort((a, b) => b.strength - a.strength)[0] || null,
-    count: patterns.length,
-  };
-}
