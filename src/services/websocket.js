@@ -1,139 +1,100 @@
-class WebSocketManager {
-  constructor() {
-    this.connections = new Map();
-    this.reconnectAttempts = new Map();
-    this.maxReconnectAttempts = 5;
-    this.reconnectDelay = 3000;
+// Thin, reusable WebSocket wrapper: handles connect, reconnect with
+// backoff, and routes incoming messages to listeners keyed by req_id.
+
+export class ReconnectingSocket {
+  constructor(url) {
+    this.url = url
+    this.ws = null
+    this.isConnected = false
+    this.listeners = new Map()
+    this.reconnectAttempts = 0
+    this.maxReconnectDelay = 15000
+    this.shouldReconnect = true
+    this.onStatusChange = null
   }
 
-  createConnection(url, options = {}) {
-    if (this.connections.has(url)) {
-      return this.connections.get(url);
-    }
-
-    const connection = {
-      ws: null,
-      url,
-      options,
-      listeners: new Map(),
-      isConnected: false,
-    };
-
-    this.connect(url, connection);
-    this.connections.set(url, connection);
-    return connection;
-  }
-
-  connect(url, connection) {
-    try {
-      connection.ws = new WebSocket(url);
-
-      connection.ws.onopen = () => {
-        connection.isConnected = true;
-        this.reconnectAttempts.set(url, 0);
-        this.emit(url, 'connected', { url });
-        console.log(`Connected to ${url}`);
-      };
-
-      connection.ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          this.emit(url, 'message', data);
-        } catch (error) {
-          console.error('Failed to parse message:', error);
-        }
-      };
-
-      connection.ws.onerror = (error) => {
-        console.error(`WebSocket error for ${url}:`, error);
-        this.emit(url, 'error', error);
-      };
-
-      connection.ws.onclose = () => {
-        connection.isConnected = false;
-        this.emit(url, 'disconnected', { url });
-        this.handleReconnect(url, connection);
-      };
-    } catch (error) {
-      console.error(`Failed to create connection to ${url}:`, error);
-      this.handleReconnect(url, connection);
-    }
-  }
-
-  handleReconnect(url, connection) {
-    const attempts = this.reconnectAttempts.get(url) || 0;
-    
-    if (attempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts.set(url, attempts + 1);
-      
-      setTimeout(() => {
-        console.log(`Reconnecting to ${url} (Attempt ${attempts + 1})`);
-        this.connect(url, connection);
-      }, this.reconnectDelay * Math.pow(2, attempts));
-    } else {
-      console.error(`Max reconnection attempts reached for ${url}`);
-      this.emit(url, 'maxReconnectReached', { url });
-    }
-  }
-
-  addListener(url, event, callback) {
-    const connection = this.connections.get(url);
-    if (!connection) return;
-
-    if (!connection.listeners.has(event)) {
-      connection.listeners.set(event, []);
-    }
-    connection.listeners.get(event).push(callback);
-  }
-
-  removeListener(url, event, callback) {
-    const connection = this.connections.get(url);
-    if (!connection) return;
-
-    const listeners = connection.listeners.get(event);
-    if (listeners) {
-      connection.listeners.set(
-        event,
-        listeners.filter(cb => cb !== callback)
-      );
-    }
-  }
-
-  emit(url, event, data) {
-    const connection = this.connections.get(url);
-    if (!connection) return;
-
-    const listeners = connection.listeners.get(event) || [];
-    listeners.forEach(callback => {
+  connect() {
+    return new Promise((resolve, reject) => {
       try {
-        callback(data);
-      } catch (error) {
-        console.error(`Error in listener for ${event}:`, error);
+        this.ws = new WebSocket(this.url)
+
+        this.ws.onopen = () => {
+          this.isConnected = true
+          this.reconnectAttempts = 0
+          this._notifyStatus('connected')
+          resolve()
+        }
+
+        this.ws.onmessage = (event) => {
+          let data
+          try {
+            data = JSON.parse(event.data)
+          } catch {
+            return
+          }
+          if (data.req_id && this.listeners.has(data.req_id)) {
+            this.listeners.get(data.req_id).forEach((cb) => cb(data))
+          }
+          if (this.listeners.has('*')) {
+            this.listeners.get('*').forEach((cb) => cb(data))
+          }
+        }
+
+        this.ws.onerror = () => {
+          this._notifyStatus('error')
+        }
+
+        this.ws.onclose = () => {
+          this.isConnected = false
+          this._notifyStatus('disconnected')
+          if (this.shouldReconnect) this._scheduleReconnect()
+        }
+
+        setTimeout(() => {
+          if (!this.isConnected) reject(new Error('Connection timeout'))
+        }, 15000)
+      } catch (err) {
+        reject(err)
       }
-    });
+    })
   }
 
-  send(url, data) {
-    const connection = this.connections.get(url);
-    if (connection && connection.ws && connection.isConnected) {
-      connection.ws.send(typeof data === 'string' ? data : JSON.stringify(data));
+  _scheduleReconnect() {
+    this.reconnectAttempts += 1
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts, this.maxReconnectDelay)
+    setTimeout(() => {
+      if (this.shouldReconnect && !this.isConnected) {
+        this.connect().catch(() => {})
+      }
+    }, delay)
+  }
+
+  _notifyStatus(status) {
+    if (typeof this.onStatusChange === 'function') this.onStatusChange(status)
+  }
+
+  send(payload) {
+    if (this.ws && this.isConnected) {
+      this.ws.send(JSON.stringify(payload))
+      return true
     }
+    return false
   }
 
-  closeConnection(url) {
-    const connection = this.connections.get(url);
-    if (connection) {
-      connection.ws?.close();
-      this.connections.delete(url);
-      this.reconnectAttempts.delete(url);
-    }
+  addListener(key, cb) {
+    if (!this.listeners.has(key)) this.listeners.set(key, [])
+    this.listeners.get(key).push(cb)
   }
 
-  closeAll() {
-    this.connections.forEach((connection, url) => {
-      this.closeConnection(url);
-    });
+  removeListener(key, cb) {
+    const arr = this.listeners.get(key)
+    if (arr) this.listeners.set(key, arr.filter((f) => f !== cb))
+  }
+
+  disconnect() {
+    this.shouldReconnect = false
+    if (this.ws) this.ws.close()
+    this.isConnected = false
   }
 }
 
-export const wsManager = new WebSocketManager();
