@@ -1,68 +1,68 @@
-import React from 'react';
-import { motion } from 'framer-motion';
-import { 
-  TrendingUp, TrendingDown, Target, 
-  Shield, Activity, Award 
-} from 'lucide-react';
-import { formatNumber, formatPercent } from '../utils/formatters';
-import clsx from 'clsx';
+import React, { useMemo } from 'react'
+import { COLORS } from '../constants/colors.js'
+import { marketCategory } from '../constants/markets.js'
 
-export default function PerformanceMetrics({ performance, compact = false }) {
-  if (!performance) {
+export default function PerformanceMetrics({ history }) {
+  const stats = useMemo(() => {
+    if (!history || history.length === 0) return null
+
+    const byCategory = {}
+    for (const h of history) {
+      const cat = marketCategory(h.symbol)
+      byCategory[cat] = byCategory[cat] || { count: 0, avgConfidence: 0, totalConfidence: 0 }
+      byCategory[cat].count += 1
+      byCategory[cat].totalConfidence += (h.confluence || 0)
+    }
+    for (const cat of Object.keys(byCategory)) {
+      byCategory[cat].avgConfidence = Math.round(byCategory[cat].totalConfidence / byCategory[cat].count)
+    }
+
+    const avgConfidence = Math.round(history.reduce((s, h) => s + (h.confluence || 0), 0) / history.length)
+    const avgRR = (history.reduce((s, h) => s + Number(h.riskReward || 0), 0) / history.length).toFixed(2)
+    const buyRatio = Math.round((history.filter((h) => h.direction === 'BUY').length / history.length) * 100)
+
+    return { byCategory, avgConfidence, avgRR, buyRatio, total: history.length }
+  }, [history])
+
+  if (!stats) {
     return (
-      <div className="glass-card p-4 text-center">
-        <p className="text-slate-400 text-sm">No performance data yet</p>
+      <div style={{ textAlign: 'center', color: COLORS.textFaint, padding: 40 }}>
+        No signals generated yet this session — performance metrics will populate after scans.
       </div>
-    );
-  }
-
-  const metrics = [
-    { label: 'Win Rate', value: formatPercent(performance.winRate), icon: Target, color: 'emerald' },
-    { label: 'Profit Factor', value: performance.profitFactor?.toFixed(2), icon: TrendingUp, color: 'blue' },
-    { label: 'Sharpe Ratio', value: performance.sharpeRatio?.toFixed(2), icon: Award, color: 'purple' },
-    { label: 'Max Drawdown', value: `$${formatNumber(performance.maxDrawdown, 0)}`, icon: TrendingDown, color: 'red' },
-    { label: 'Total Trades', value: performance.totalTrades, icon: Activity, color: 'amber' },
-    { label: 'Avg R:R', value: `1:${performance.averageRR?.toFixed(1)}`, icon: Shield, color: 'cyan' },
-  ];
-
-  if (compact) {
-    return (
-      <div className="glass-card p-4 space-y-3">
-        <h4 className="text-sm font-semibold text-slate-400">Performance</h4>
-        {metrics.slice(0, 4).map(metric => (
-          <div key={metric.label} className="flex justify-between items-center">
-            <span className="text-xs text-slate-500">{metric.label}</span>
-            <span className={clsx("text-sm font-bold", `text-${metric.color}-400`)}>
-              {metric.value}
-            </span>
-          </div>
-        ))}
-      </div>
-    );
+    )
   }
 
   return (
-    <div className="glass-card p-6">
-      <h3 className="text-lg font-semibold mb-4">Performance Metrics</h3>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        {metrics.map((metric, index) => (
-          <motion.div
-            key={metric.label}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: index * 0.1 }}
-            className="p-4 bg-slate-800/50 rounded-xl"
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <metric.icon className={clsx("w-4 h-4", `text-${metric.color}-400`)} />
-              <span className="text-xs text-slate-400">{metric.label}</span>
-            </div>
-            <p className={clsx("text-xl font-bold", `text-${metric.color}-400`)}>
-              {metric.value}
-            </p>
-          </motion.div>
+    <div style={{ display: 'grid', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
+        <MetricBox label="Total Signals" value={stats.total} color={COLORS.accentBlueLight} />
+        <MetricBox label="Avg Confidence" value={`${stats.avgConfidence}%`} color={COLORS.accentPurple} />
+        <MetricBox label="Avg R:R" value={`1:${stats.avgRR}`} color={COLORS.buy} />
+        <MetricBox label="Buy Ratio" value={`${stats.buyRatio}%`} color={COLORS.warn} />
+      </div>
+
+      <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 16, padding: 20 }}>
+        <h3 style={{ fontSize: 15, marginBottom: 12, color: COLORS.textDim }}>By Category</h3>
+        {Object.entries(stats.byCategory).map(([cat, data]) => (
+          <div key={cat} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${COLORS.border}` }}>
+            <span style={{ textTransform: 'capitalize' }}>{cat.replace('_', ' ')}</span>
+            <span style={{ color: COLORS.textDim }}>{data.count} signals · {data.avgConfidence}% avg</span>
+          </div>
         ))}
       </div>
+
+      <p style={{ fontSize: 11, color: COLORS.textFaint, textAlign: 'center' }}>
+        These metrics reflect signal generation quality this session only — not verified trade outcomes.
+      </p>
     </div>
-  );
+  )
+}
+
+function MetricBox({ label, value, color }) {
+  return (
+    <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 16, textAlign: 'center' }}>
+      <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
+      <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 4 }}>{label}</div>
+    </div>
+  )
 }
