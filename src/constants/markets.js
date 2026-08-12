@@ -1,54 +1,87 @@
-export const FOREX_PAIRS = {
-  major: [
-    { symbol: 'EURUSD', name: 'EUR/USD', spread: 0.1, pipValue: 10 },
-    { symbol: 'GBPUSD', name: 'GBP/USD', spread: 0.2, pipValue: 10 },
-    { symbol: 'USDJPY', name: 'USD/JPY', spread: 0.1, pipValue: 9.15 },
-    { symbol: 'USDCHF', name: 'USD/CHF', spread: 0.2, pipValue: 10.87 },
-    { symbol: 'AUDUSD', name: 'AUD/USD', spread: 0.3, pipValue: 10 },
-    { symbol: 'NZDUSD', name: 'NZD/USD', spread: 0.4, pipValue: 10 },
-    { symbol: 'USDCAD', name: 'USD/CAD', spread: 0.2, pipValue: 7.45 },
-  ],
-  minor: [
-    { symbol: 'EURGBP', name: 'EUR/GBP', spread: 0.3, pipValue: 12.60 },
-    { symbol: 'EURJPY', name: 'EUR/JPY', spread: 0.4, pipValue: 9.15 },
-    { symbol: 'GBPJPY', name: 'GBP/JPY', spread: 0.5, pipValue: 9.15 },
-    { symbol: 'EURCHF', name: 'EUR/CHF', spread: 0.4, pipValue: 10.87 },
-    { symbol: 'AUDJPY', name: 'AUD/JPY', spread: 0.5, pipValue: 9.15 },
-  ],
-  exotic: [
-    { symbol: 'USDTRY', name: 'USD/TRY', spread: 5.0, pipValue: 0.34 },
-    { symbol: 'USDMXN', name: 'USD/MXN', spread: 3.0, pipValue: 0.57 },
-    { symbol: 'USDZAR', name: 'USD/ZAR', spread: 5.0, pipValue: 0.53 },
-  ]
-};
+// Display name -> real Deriv API symbol code.
+// Deriv's ticks_history endpoint does NOT accept display names like
+// 'VOL10' or plain forex tickers like 'EURUSD' — every symbol must be
+// translated to its actual API code before being sent.
+export const DERIV_SYMBOL_MAP = {
+  // Volatility (synthetic) indices
+  VOL10: 'R_10',
+  VOL25: 'R_25',
+  VOL50: 'R_50',
+  VOL75: 'R_75',
+  VOL100: 'R_100',
+  'VOL10-1S': '1HZ10V',
+  'VOL25-1S': '1HZ25V',
+  'VOL50-1S': '1HZ50V',
+  'VOL75-1S': '1HZ75V',
+  'VOL100-1S': '1HZ100V',
+  CRASH500: 'CRASH500N',
+  CRASH1000: 'CRASH1000N',
+  BOOM500: 'BOOM500N',
+  BOOM1000: 'BOOM1000N',
+  JUMP10: 'JD10',
+  JUMP25: 'JD25',
+  JUMP50: 'JD50',
+  JUMP75: 'JD75',
+  JUMP100: 'JD100',
+  // Forex majors/crosses (Deriv requires the 'frx' prefix)
+  EURUSD: 'frxEURUSD',
+  GBPUSD: 'frxGBPUSD',
+  USDJPY: 'frxUSDJPY',
+  AUDUSD: 'frxAUDUSD',
+  NZDUSD: 'frxNZDUSD',
+  USDCAD: 'frxUSDCAD',
+  USDCHF: 'frxUSDCHF',
+  EURGBP: 'frxEURGBP',
+  EURJPY: 'frxEURJPY',
+  GBPJPY: 'frxGBPJPY'
+}
 
-export const SYNTHETIC_INDICES = {
-  volatility: [
-    { symbol: 'VOL10', name: 'Volatility 10', volatility: 'Low' },
-    { symbol: 'VOL25', name: 'Volatility 25', volatility: 'Medium' },
-    { symbol: 'VOL50', name: 'Volatility 50', volatility: 'Medium-High' },
-    { symbol: 'VOL75', name: 'Volatility 75', volatility: 'High' },
-    { symbol: 'VOL100', name: 'Volatility 100', volatility: 'Extreme' },
-  ],
-  crashBoom: [
-    { symbol: 'CRASH300', name: 'Crash 300', type: 'Crash' },
-    { symbol: 'CRASH500', name: 'Crash 500', type: 'Crash' },
-    { symbol: 'CRASH1000', name: 'Crash 1000', type: 'Crash' },
-    { symbol: 'BOOM300', name: 'Boom 300', type: 'Boom' },
-    { symbol: 'BOOM500', name: 'Boom 500', type: 'Boom' },
-    { symbol: 'BOOM1000', name: 'Boom 1000', type: 'Boom' },
-  ],
-  jump: [
-    { symbol: 'JUMP10', name: 'Jump 10', type: 'Jump' },
-    { symbol: 'JUMP25', name: 'Jump 25', type: 'Jump' },
-    { symbol: 'JUMP50', name: 'Jump 50', type: 'Jump' },
-    { symbol: 'JUMP75', name: 'Jump 75', type: 'Jump' },
-    { symbol: 'JUMP100', name: 'Jump 100', type: 'Jump' },
-  ]
-};
+export function toDerivSymbol(displaySymbol) {
+  return DERIV_SYMBOL_MAP[displaySymbol] || displaySymbol
+}
 
-export const MARKET_SESSIONS = {
-  asian: { start: '00:00', end: '09:00', timezone: 'GMT+8', pairs: ['USDJPY', 'AUDUSD', 'NZDUSD'] },
-  london: { start: '08:00', end: '17:00', timezone: 'GMT', pairs: ['EURUSD', 'GBPUSD', 'EURGBP'] },
-  newYork: { start: '13:00', end: '22:00', timezone: 'GMT-5', pairs: ['EURUSD', 'GBPUSD', 'USDCAD'] },
-};
+export const MARKETS = {
+  synthetic: [
+    'VOL10', 'VOL25', 'VOL50', 'VOL75', 'VOL100',
+    'VOL10-1S', 'VOL25-1S', 'VOL50-1S', 'VOL75-1S', 'VOL100-1S',
+    'CRASH500', 'CRASH1000', 'BOOM500', 'BOOM1000',
+    'JUMP10', 'JUMP25', 'JUMP50'
+  ],
+  forex: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF', 'EURGBP', 'EURJPY', 'GBPJPY']
+}
+
+export const ALL_MARKETS = [...MARKETS.synthetic, ...MARKETS.forex]
+
+export const BOOM_CRASH_SYMBOLS = ['CRASH500', 'CRASH1000', 'BOOM500', 'BOOM1000']
+export const JUMP_SYMBOLS = ['JUMP10', 'JUMP25', 'JUMP50']
+export const VOLATILITY_SYMBOLS = ['VOL10', 'VOL25', 'VOL50', 'VOL75', 'VOL100']
+
+export function marketCategory(symbol) {
+  if (BOOM_CRASH_SYMBOLS.includes(symbol)) return 'boom_crash'
+  if (JUMP_SYMBOLS.includes(symbol)) return 'jump'
+  if (VOLATILITY_SYMBOLS.includes(symbol)) return 'volatility'
+  if (MARKETS.forex.includes(symbol)) return 'forex'
+  return 'unknown'
+}
+
+// Decimal precision for display — synthetic indices trade at very
+// different scales from each other, so a single default is wrong.
+export const SYNTHETIC_DECIMALS = {
+  VOL10: 3, VOL25: 3, VOL50: 2, VOL75: 2, VOL100: 2,
+  'VOL10-1S': 3, 'VOL25-1S': 3, 'VOL50-1S': 2, 'VOL75-1S': 2, 'VOL100-1S': 2,
+  CRASH500: 2, CRASH1000: 2, BOOM500: 2, BOOM1000: 2,
+  JUMP10: 2, JUMP25: 2, JUMP50: 2
+}
+
+export const FOREX_DECIMALS = {
+  EURUSD: 5, GBPUSD: 5, AUDUSD: 5, NZDUSD: 5, USDCAD: 5, USDCHF: 5,
+  EURGBP: 5, EURJPY: 3, GBPJPY: 3, USDJPY: 3
+}
+
+// Forex sessions in UTC hours, used by the session filter.
+export const FOREX_SESSIONS = {
+  sydney: { start: 21, end: 6 },
+  tokyo: { start: 0, end: 9 },
+  london: { start: 7, end: 16 },
+  newYork: { start: 12, end: 21 }
+}
