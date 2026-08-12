@@ -1,19 +1,24 @@
-export function volatilityFilter(volatilityAnalysis) {
-  if (!volatilityAnalysis) return false;
+import { calculateATRSeries, atrPercent } from '../../indicators/atr.js'
+import { mean } from '../../utils/math.js'
 
-  const { state, atrPercentile, isTradeable } = volatilityAnalysis;
+// Rejects both dead markets (ATR too low relative to its own recent
+// history — spread/cost will dominate any edge) and chaotic spikes
+// (ATR far above its recent average — unreliable stop placement).
+export function volatilityFilter(highs, lows, closes, { lowMultiplier = 0.5, highMultiplier = 2.5, lookback = 30 } = {}) {
+  const atrSeries = calculateATRSeries(highs, lows, closes)
+  const currentAtr = atrSeries[atrSeries.length - 1]
+  const baselineAtr = mean(atrSeries.slice(-lookback))
+  const price = closes[closes.length - 1]
 
-  // Reject if not tradeable
-  if (!isTradeable) return false;
+  const tooLow = currentAtr < baselineAtr * lowMultiplier
+  const tooHigh = currentAtr > baselineAtr * highMultiplier
 
-  // Reject during squeeze
-  if (state === 'SQUEEZE') return false;
-
-  // Reject extreme volatility
-  if (atrPercentile > 95) return false;
-
-  // Reject very low volatility
-  if (atrPercentile < 10) return false;
-
-  return true;
+  return {
+    atr: currentAtr,
+    atrPct: atrPercent(currentAtr, price),
+    baselineAtr,
+    tooLow,
+    tooHigh,
+    passed: !tooLow && !tooHigh
+  }
 }
