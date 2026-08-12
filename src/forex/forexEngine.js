@@ -1,226 +1,164 @@
-import { trendAnalysis } from './analysis/trendAnalysis';
-import { momentumAnalysis } from './analysis/momentumAnalysis';
-import { volatilityAnalysis } from './analysis/volatilityAnalysis';
-import { marketRegime } from './analysis/marketRegime';
-import { marketStructureAnalysis } from './priceAction/marketStructure';
-import { detectBOS } from './priceAction/bos';
-import { detectCHoCH } from './priceAction/choch';
-import { identifySRLevels } from './priceAction/supportResistance';
-import { identifySupplyDemand } from './priceAction/supplyDemand';
-import { detectLiquiditySweep } from './priceAction/liquiditySweep';
-import { detectBreakout } from './priceAction/breakout';
-import { detectRetest } from './priceAction/retest';
-import { detectCandlestickPatterns } from './priceAction/candlestickPatterns';
-import { detectChartPatterns } from './priceAction/chartPatterns';
-import { trendFilter } from './filters/trendFilter';
-import { momentumFilter } from './filters/momentumFilter';
-import { volatilityFilter } from './filters/volatilityFilter';
-import { sessionFilter } from './filters/sessionFilter';
+import { classifyRegime } from './analysis/marketRegime.js'
+import { trendFilter } from './filters/trendFilter.js'
+import { momentumFilter } from './filters/momentumFilter.js'
+import { volatilityFilter } from './filters/volatilityFilter.js'
+import { sessionFilter } from './filters/sessionFilter.js'
 
-export class ForexEngine {
-  constructor() {
-    this.analyses = new Map();
+import { detectBOS } from './priceAction/bos.js'
+import { detectCHoCH } from './priceAction/choch.js'
+import { detectRangeBreakout } from './priceAction/breakout.js'
+import { detectLiquiditySweep } from './priceAction/liquiditySweep.js'
+import { findSupplyDemandZones, nearestZoneSignal } from './priceAction/supplyDemand.js'
+import { detectCandlestickPattern } from './priceAction/candlestickPatterns.js'
+import { detectDoubleTopBottom } from './priceAction/chartPatterns.js'
+import { detectRetest } from './priceAction/retest.js'
+import { nearestSwingLevels } from './priceAction/marketStructure.js'
+
+import { calculateATR } from '../indicators/atr.js'
+import { buildConfirmation, detectConflict } from '../shared/confirmationEngine.js'
+import { buildConfidenceScore } from '../shared/confidenceScore.js'
+import { calculateTpSl } from '../shared/tpSlCalculator.js'
+import { validateSignal } from '../shared/signalValidator.js'
+import { genId } from '../utils/helpers.js'
+
+// Runs every entry-model detector once and returns only the ones that
+// actually fired. Each detector is independent — a model firing on an
+// unrelated historical zone (a past bug) is prevented because every
+// detector only looks at the CURRENT last candle relative to recent
+// structure, never a stale historical index.
+function runEntryModels({ highs, lows, closes, opens }) {
+  const models = []
+
+  const bos = detectBOS(highs, lows, closes)
+  if (bos) models.push(bos)
+
+  const choch = detectCHoCH(highs, lows, closes)
+  if (choch) models.push(choch)
+
+  // Breakout only counted if BOS didn't already fire in the same
+  // direction — prevents the double-counting bug from before.
+  const breakout = detectRangeBreakout(highs, lows, closes)
+  if (breakout && !(bos && bos.direction === breakout.direction)) {
+    models.push(breakout)
   }
 
-  async analyze(candles, timeframe, symbol) {
-    if (!candles || candles.length < 50) {
-      return null;
-    }
+  const sweep = detectLiquiditySweep(highs, lows, closes)
+  if (sweep) models.push(sweep)
 
-    const highs = candles.map(c => c.high);
-    const lows = candles.map(c => c.low);
-    const closes = candles.map(c => c.close);
-    const opens = candles.map(c => c.open);
-    const volumes = candles.map(c => c.volume || 0);
-    const currentPrice = closes[closes.length - 1];
+  const candle = detectCandlestickPattern(opens, highs, lows, closes)
+  if (candle) models.push(candle)
 
-    // Run all analyses in parallel
-    const [
-      trend,
-      momentum,
-      volatility,
-      regime,
-      structure,
-      bos,
-      choch,
-      srLevels,
-      supplyDemand,
-      liquidity,
-      breakout,
-      retest,
-      candlePatterns,
-      chartPatterns
-    ] = await Promise.all([
-      trendAnalysis(highs, lows, closes),
-      momentumAnalysis(closes, highs, lows),
-      volatilityAnalysis(highs, lows, closes),
-      marketRegime(highs, lows, closes, volumes),
-      marketStructureAnalysis(highs, lows, closes),
-      detectBOS(highs, lows, closes),
-      detectCHoCH(highs, lows, closes),
-      identifySRLevels(highs, lows, closes),
-      identifySupplyDemand(highs, lows, closes, volumes),
-      detectLiquiditySweep(highs, lows, closes),
-      detectBreakout(highs, lows, closes, volumes),
-      detectRetest(highs, lows, closes, srLevels),
-      detectCandlestickPatterns(opens, highs, lows, closes),
-      detectChartPatterns(highs, lows, closes)
-    ]);
+  const chartPattern = detectDoubleTopBottom(highs, lows, closes)
+  if (chartPattern) models.push(chartPattern)
 
-    // Apply filters
-    const passesFilters = this.applyFilters({
-      trend,
-      momentum,
-      volatility,
-      regime,
-      timeframe,
-      symbol
-    });
+  const atr = calculateATR(highs, lows, closes)
+  const zones = findSupplyDemandZones(highs, lows, closes, opens)
+  const currentPrice = closes[closes.length - 1]
+  const zoneSignal = nearestZoneSignal(zones, currentPrice, atr)
+  const staleZone = zoneSignal?.staleZone === true
+  if (zoneSignal?.triggered) models.push({ type: 'SUPPLY_DEMAND', direction: zoneSignal.direction, source: 'supplyDemand' })
 
-    const analysis = {
-      symbol,
-      timeframe,
-      currentPrice,
-      timestamp: Date.now(),
-      
-      trend,
-      momentum,
-      volatility,
-      regime,
-      
-      priceAction: {
-        structure,
-        bos,
-        choch,
-        srLevels,
-        supplyDemand,
-        liquidity,
-        breakout,
-        retest,
-        candlePatterns,
-        chartPatterns
-      },
-      
-      filters: passesFilters,
-      
-      // Generate signal based on all analyses
-      signal: this.generateSignal({
-        trend,
-        momentum,
-        volatility,
-        regime,
-        structure,
-        bos,
-        choch,
-        breakout,
-        retest,
-        candlePatterns,
-        currentPrice
-      }),
-      
-      // Calculate confidence
-      confidence: this.calculateConfidence({
-        trend,
-        momentum,
-        volatility,
-        structure,
-        passesFilters
-      })
-    };
-
-    this.analyses.set(`${symbol}_${timeframe}`, analysis);
-    return analysis;
-  }
-
-  applyFilters(data) {
-    const results = {
-      trend: trendFilter(data.trend),
-      momentum: momentumFilter(data.momentum),
-      volatility: volatilityFilter(data.volatility),
-      session: sessionFilter(data.symbol, data.timeframe),
-    };
-
-    results.passed = Object.values(results).every(r => r !== false);
-    return results;
-  }
-
-  generateSignal(data) {
-    let score = 0;
-    let signal = 'NEUTRAL';
-    
-    const { trend, momentum, structure, bos, choch, breakout, retest, candlePatterns } = data;
-
-    // Trend analysis scoring
-    if (trend.direction === 'STRONG_BULLISH') score += 30;
-    else if (trend.direction === 'BULLISH') score += 20;
-    else if (trend.direction === 'STRONG_BEARISH') score -= 30;
-    else if (trend.direction === 'BEARISH') score -= 20;
-
-    // Momentum scoring
-    if (momentum.signal === 'STRONG_BUY') score += 25;
-    else if (momentum.signal === 'BUY') score += 15;
-    else if (momentum.signal === 'STRONG_SELL') score -= 25;
-    else if (momentum.signal === 'SELL') score -= 15;
-
-    // Structure scoring
-    if (structure.trend === 'BULLISH') score += 15;
-    else if (structure.trend === 'BEARISH') score -= 15;
-
-    // BOS/CHoCH scoring
-    if (bos?.direction === 'BULLISH') score += 10;
-    if (bos?.direction === 'BEARISH') score -= 10;
-    if (choch?.direction === 'BULLISH') score += 15;
-    if (choch?.direction === 'BEARISH') score -= 15;
-
-    // Breakout scoring
-    if (breakout?.direction === 'BULLISH') score += 10;
-    if (breakout?.direction === 'BEARISH') score -= 10;
-
-    // Retest scoring
-    if (retest?.active) {
-      if (retest.direction === 'BULLISH') score += 10;
-      if (retest.direction === 'BEARISH') score -= 10;
-    }
-
-    // Candlestick patterns
-    if (candlePatterns?.bullish) score += 5;
-    if (candlePatterns?.bearish) score -= 5;
-
-    if (score >= 50) signal = 'STRONG_BUY';
-    else if (score >= 25) signal = 'BUY';
-    else if (score <= -50) signal = 'STRONG_SELL';
-    else if (score <= -25) signal = 'SELL';
-
-    return signal;
-  }
-
-  calculateConfidence(data) {
-    let confidence = 50;
-    
-    // Trend alignment increases confidence
-    if (data.trend.strength > 70) confidence += 15;
-    else if (data.trend.strength > 40) confidence += 10;
-
-    // Momentum confirmation
-    if (data.momentum.strength > 70) confidence += 10;
-    
-    // Structure adds confidence
-    if (data.structure.quality === 'HIGH') confidence += 10;
-    
-    // Filters passing adds confidence
-    if (data.passesFilters.passed) confidence += 15;
-    
-    // Cap at 100
-    return Math.min(100, confidence);
-  }
-
-  getAnalysis(symbol, timeframe) {
-    return this.analyses.get(`${symbol}_${timeframe}`);
-  }
-
-  clearCache() {
-    this.analyses.clear();
-  }
+  return { models, staleZone }
 }
 
-export const forexEngine = new ForexEngine();
+export async function analyzeForexMarket(symbol, timeframe, candleData) {
+  const { candles } = candleData
+  if (!candles || candles.length < 60) return null
+
+  const opens = candles.map((c) => c.open)
+  const highs = candles.map((c) => c.high)
+  const lows = candles.map((c) => c.low)
+  const closes = candles.map((c) => c.close)
+  const currentPrice = closes[closes.length - 1]
+
+  // --- Regime gate: only look for entries in a trending regime ---
+  const regime = classifyRegime(highs, lows, closes)
+  if (!regime.tradeable) return null
+
+  // --- Session gate ---
+  const session = sessionFilter()
+  if (!session.passed) return null
+
+  const direction = regime.trend.finalBias
+  if (direction === 'NEUTRAL') return null
+
+  // --- Filters ---
+  const trend = trendFilter(closes, highs, lows)
+  const momentum = momentumFilter(closes, direction)
+  const volatility = volatilityFilter(highs, lows, closes)
+
+  if (!trend.passed || !momentum.passed || !volatility.passed) return null
+
+  // --- Entry models (hard gate: zero models = no signal) ---
+  const { models, staleZone } = runEntryModels({ highs, lows, closes, opens })
+  const modelsInDirection = models.filter((m) => m.direction === direction)
+  const conflictingSignal = detectConflict(models)
+
+  if (modelsInDirection.length === 0) return null
+
+  // --- Multi-timeframe confirmation is layered on by multiTimeframeAnalyzer
+  //     upstream; here we confirm against this single timeframe's structure ---
+  const confirmation = buildConfirmation({
+    htfBias: direction,
+    ltfBias: direction,
+    entryModels: modelsInDirection,
+    structureFilterPassed: true
+  })
+
+  if (!confirmation.confirmed) return null
+
+  // --- Confidence scoring ---
+  const { score, breakdown } = buildConfidenceScore({
+    trendAlignment: trend.passed,
+    momentum: momentum.passed,
+    structureConfirmed: confirmation.entryModelConfirmed,
+    volatilityOk: volatility.passed,
+    multiTimeframe: confirmation.htfAligned
+  })
+
+  // --- TP/SL using ATR + nearest structural level ---
+  const { nearestSwingHigh, nearestSwingLow } = nearestSwingLevels(highs, lows, closes.length - 1)
+  const { stopLoss, takeProfit, riskReward } = calculateTpSl({
+    entry: currentPrice,
+    direction,
+    atr: volatility.atr,
+    nearestSwingHigh,
+    nearestSwingLow
+  })
+
+  // Check for a retest pattern on the primary entry model (bonus context, not a gate)
+  const primaryModel = modelsInDirection[0]
+  const isRetestEntry = primaryModel?.brokenLevel != null
+    ? detectRetest(highs, lows, closes, primaryModel.brokenLevel, direction, volatility.atr)
+    : false
+
+  const candidate = {
+    id: genId('sig'),
+    symbol,
+    market: 'forex',
+    timeframe,
+    direction,
+    entry: currentPrice,
+    stopLoss,
+    takeProfit,
+    riskReward,
+    confidence: score,
+    confidenceBreakdown: breakdown,
+    entryModelConfirmed: confirmation.entryModelConfirmed,
+    entryModels: modelsInDirection.map((m) => m.type),
+    htfAligned: confirmation.htfAligned,
+    conflictingSignal,
+    staleZone,
+    isRetestEntry,
+    regime: regime.regime,
+    rsi: Math.round(momentum.rsi ?? 0),
+    adx: Math.round(trend.adx),
+    timestamp: Date.now()
+  }
+
+  const validation = validateSignal(candidate)
+  if (!validation.valid) return null
+
+  return candidate
+      }
+  
