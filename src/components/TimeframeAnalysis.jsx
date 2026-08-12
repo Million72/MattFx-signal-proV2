@@ -1,110 +1,73 @@
-import React from 'react';
-import { motion } from 'framer-motion';
-import { 
-  TrendingUp, TrendingDown, Minus, 
-  Activity, Layers 
-} from 'lucide-react';
-import { TIMEFRAME_HIERARCHY } from '../constants/timeframes';
-import clsx from 'clsx';
+import React, { useState, useCallback } from 'react'
+import { COLORS } from '../constants/colors.js'
+import { ALL_MARKETS } from '../constants/markets.js'
+import { TIMEFRAMES } from '../constants/timeframes.js'
+import { derivService } from '../services/deriv.js'
+import { analyzeTrend } from '../forex/analysis/trendAnalysis.js'
 
-export default function TimeframeAnalysis({ marketData, selectedTimeframe }) {
-  const hierarchy = TIMEFRAME_HIERARCHY[selectedTimeframe];
-  if (!hierarchy) return null;
+export default function TimeframeAnalysis() {
+  const [symbol, setSymbol] = useState(ALL_MARKETS[0])
+  const [loading, setLoading] = useState(false)
+  const [rows, setRows] = useState([])
 
-  const getAnalysis = (tf) => {
-    return marketData?.timeframes?.[tf] || {
-      signal: 'NEUTRAL',
-      strength: 0,
-      confidence: 0,
-    };
-  };
+  const run = useCallback(async () => {
+    setLoading(true)
+    setRows([])
+    const results = []
 
-  const TimeframeCard = ({ timeframe, type, analysis }) => {
-    const isBuy = analysis.signal === 'BUY';
-    const isSell = analysis.signal === 'SELL';
-    
-    return (
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className={clsx(
-          "p-3 rounded-xl border",
-          isBuy ? "bg-emerald-500/10 border-emerald-500/20" :
-          isSell ? "bg-red-500/10 border-red-500/20" :
-          "bg-slate-500/10 border-slate-500/20"
-        )}
-      >
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-slate-400">{type}</span>
-          <span className="text-sm font-bold text-white">{timeframe}</span>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          {isBuy ? <TrendingUp className="w-4 h-4 text-emerald-400" /> :
-           isSell ? <TrendingDown className="w-4 h-4 text-red-400" /> :
-           <Minus className="w-4 h-4 text-slate-400" />}
-          <span className={clsx(
-            "text-sm font-semibold",
-            isBuy ? "text-emerald-400" :
-            isSell ? "text-red-400" : "text-slate-400"
-          )}>
-            {analysis.signal}
-          </span>
-        </div>
+    for (const tf of TIMEFRAMES) {
+      const { candles, error } = await derivService.getCandles(symbol, tf.value, 100)
+      if (error || candles.length < 60) {
+        results.push({ tf: tf.label, bias: 'N/A', adx: null })
+        continue
+      }
+      const trend = analyzeTrend(
+        candles.map((c) => c.high),
+        candles.map((c) => c.low),
+        candles.map((c) => c.close)
+      )
+      results.push({ tf: tf.label, bias: trend.finalBias, adx: trend.adx })
+    }
 
-        <div className="mt-2">
-          <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
-            <div
-              className={clsx(
-                "h-full rounded-full",
-                isBuy ? "bg-emerald-500" : isSell ? "bg-red-500" : "bg-slate-500"
-              )}
-              style={{ width: `${analysis.strength}%` }}
-            />
-          </div>
-        </div>
-      </motion.div>
-    );
-  };
+    setRows(results)
+    setLoading(false)
+  }, [symbol])
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Layers className="w-4 h-4 text-blue-400" />
-        <h3 className="text-sm font-semibold">Multi-Timeframe View</h3>
+    <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 16, padding: 24 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <select
+          value={symbol}
+          onChange={(e) => setSymbol(e.target.value)}
+          style={{ flex: 1, minWidth: 140, padding: '10px 12px', borderRadius: 8, background: COLORS.bgAlt, color: COLORS.text, border: `1px solid ${COLORS.border}` }}
+        >
+          {ALL_MARKETS.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <button
+          onClick={run}
+          disabled={loading}
+          style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: COLORS.accentBlue, color: '#fff', fontWeight: 600, cursor: 'pointer', opacity: loading ? 0.6 : 1 }}
+        >
+          {loading ? 'Loading...' : 'Compare All'}
+        </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-        {hierarchy.ltf?.map(tf => (
-          <TimeframeCard
-            key={tf}
-            timeframe={tf}
-            type="LTF"
-            analysis={getAnalysis(tf)}
-          />
-        ))}
-        <TimeframeCard
-          timeframe={hierarchy.current}
-          type="Current"
-          analysis={getAnalysis(hierarchy.current)}
-        />
-        {hierarchy.mtf?.map(tf => (
-          <TimeframeCard
-            key={tf}
-            timeframe={tf}
-            type="MTF"
-            analysis={getAnalysis(tf)}
-          />
-        ))}
-        {hierarchy.htf?.map(tf => (
-          <TimeframeCard
-            key={tf}
-            timeframe={tf}
-            type="HTF"
-            analysis={getAnalysis(tf)}
-          />
-        ))}
-      </div>
+      {rows.length > 0 && (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {rows.map((row) => {
+            const color = row.bias === 'BULLISH' ? COLORS.buy : row.bias === 'BEARISH' ? COLORS.sell : COLORS.textDim
+            return (
+              <div key={row.tf} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: 'rgba(15,23,42,0.5)', borderRadius: 8 }}>
+                <span style={{ color: COLORS.textDim, fontWeight: 600 }}>{row.tf}</span>
+                <span style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  {row.adx != null && <span style={{ fontSize: 11, color: COLORS.textFaint }}>ADX {row.adx.toFixed(0)}</span>}
+                  <span style={{ color, fontWeight: 700 }}>{row.bias}</span>
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
-  );
+  )
 }
