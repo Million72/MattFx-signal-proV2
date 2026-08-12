@@ -1,57 +1,69 @@
-export function calculateStandardDeviation(values) {
-  const avg = values.reduce((sum, val) => sum + val, 0) / values.length;
-  const squareDiffs = values.map(val => Math.pow(val - avg, 2));
-  const avgSquareDiff = squareDiffs.reduce((sum, val) => sum + val, 0) / squareDiffs.length;
-  return Math.sqrt(avgSquareDiff);
+// Core numeric helpers shared across indicators and engines
+
+export function mean(arr) {
+  if (!arr || arr.length === 0) return 0
+  return arr.reduce((a, b) => a + b, 0) / arr.length
 }
 
-export function calculateCorrelation(x, y) {
-  const n = Math.min(x.length, y.length);
-  const xMean = x.reduce((sum, val) => sum + val, 0) / n;
-  const yMean = y.reduce((sum, val) => sum + val, 0) / n;
-  
-  let numerator = 0;
-  let xDiff = 0;
-  let yDiff = 0;
-  
+export function stddev(arr) {
+  if (!arr || arr.length < 2) return 0
+  const m = mean(arr)
+  const variance = mean(arr.map((v) => (v - m) ** 2))
+  return Math.sqrt(variance)
+}
+
+export function highest(arr, period) {
+  const slice = arr.slice(-period)
+  return Math.max(...slice)
+}
+
+export function lowest(arr, period) {
+  const slice = arr.slice(-period)
+  return Math.min(...slice)
+}
+
+export function slope(arr, lookback = 5) {
+  // Simple linear-regression slope over the last `lookback` points.
+  const data = arr.slice(-lookback)
+  const n = data.length
+  if (n < 2) return 0
+  const xMean = (n - 1) / 2
+  const yMean = mean(data)
+  let num = 0
+  let den = 0
   for (let i = 0; i < n; i++) {
-    const xDiffVal = x[i] - xMean;
-    const yDiffVal = y[i] - yMean;
-    numerator += xDiffVal * yDiffVal;
-    xDiff += xDiffVal * xDiffVal;
-    yDiff += yDiffVal * yDiffVal;
+    num += (i - xMean) * (data[i] - yMean)
+    den += (i - xMean) ** 2
   }
-  
-  return numerator / Math.sqrt(xDiff * yDiff);
+  return den === 0 ? 0 : num / den
 }
 
-export function linearRegression(x, y) {
-  const n = x.length;
-  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-  
-  for (let i = 0; i < n; i++) {
-    sumX += x[i];
-    sumY += y[i];
-    sumXY += x[i] * y[i];
-    sumX2 += x[i] * x[i];
+export function round(value, decimals = 2) {
+  const factor = 10 ** decimals
+  return Math.round(value * factor) / factor
+}
+
+export function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max)
+}
+
+export function pctChange(from, to) {
+  if (from === 0) return 0
+  return ((to - from) / from) * 100
+}
+
+export function isRising(arr, lookback = 3) {
+  const s = arr.slice(-lookback)
+  for (let i = 1; i < s.length; i++) {
+    if (s[i] <= s[i - 1]) return false
   }
-  
-  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-  const intercept = (sumY - slope * sumX) / n;
-  
-  return { slope, intercept };
+  return true
 }
 
-export function calculateZScore(value, mean, stdDev) {
-  return (value - mean) / stdDev;
-}
-
-export function normalizeValue(value, min, max) {
-  return (value - min) / (max - min);
-}
-
-export function calculateMovingAverage(values, period) {
-  if (values.length < period) return values[values.length - 1] || 0;
-  const slice = values.slice(-period);
-  return slice.reduce((sum, val) => sum + val, 0) / period;
+export function isFalling(arr, lookback = 3) {
+  const s = arr.slice(-lookback)
+  for (let i = 1; i < s.length; i++) {
+    if (s[i] >= s[i - 1]) return false
+  }
+  return true
 }
