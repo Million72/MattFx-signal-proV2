@@ -1,17 +1,22 @@
-const CACHE_NAME = 'mt5-signal-pro-v2';
+const CACHE_NAME = 'signal-pro-v2'
 
 self.addEventListener('install', (event) => {
-  self.skipWaiting();
-});
+  self.skipWaiting()
+})
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(clients.claim());
-});
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    )
+  )
+  self.clients.claim()
+})
 
+// Network-first: never serve stale JS/CSS over live data
 self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return
   event.respondWith(
-    caches.match(event.request).then((response) => {
-      return response || fetch(event.request);
-    })
-  );
-});
+    fetch(event.request).catch(() => caches.match(event.request))
+  )
+})
