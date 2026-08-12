@@ -1,118 +1,63 @@
-export class ADX {
-  constructor(period = 14) {
-    this.period = period;
-    this.values = [];
-    this.plusDI = [];
-    this.minusDI = [];
-  }
+import { trueRangeSeries } from './atr.js'
 
-  calculate(highs, lows, closes) {
-    if (highs.length < this.period + 1) {
-      return { adx: [], plusDI: [], minusDI: [] };
-    }
-
-    const tr = [];
-    const plusDM = [];
-    const minusDM = [];
-
-    // Calculate True Range and Directional Movement
-    for (let i = 1; i < highs.length; i++) {
-      const high = highs[i];
-      const low = lows[i];
-      const prevHigh = highs[i - 1];
-      const prevLow = lows[i - 1];
-      const prevClose = closes[i - 1];
-
-      // True Range
-      tr.push(Math.max(
-        high - low,
-        Math.abs(high - prevClose),
-        Math.abs(low - prevClose)
-      ));
-
-      // Directional Movement
-      const upMove = high - prevHigh;
-      const downMove = prevLow - low;
-
-      if (upMove > downMove && upMove > 0) {
-        plusDM.push(upMove);
-      } else {
-        plusDM.push(0);
-      }
-
-      if (downMove > upMove && downMove > 0) {
-        minusDM.push(downMove);
-      } else {
-        minusDM.push(0);
-      }
-    }
-
-    // Smooth with Wilder's method
-    let smoothedTR = tr.slice(0, this.period).reduce((sum, val) => sum + val, 0);
-    let smoothedPlusDM = plusDM.slice(0, this.period).reduce((sum, val) => sum + val, 0);
-    let smoothedMinusDM = minusDM.slice(0, this.period).reduce((sum, val) => sum + val, 0);
-
-    this.values = [];
-    this.plusDI = [];
-    this.minusDI = [];
-
-    for (let i = this.period; i < tr.length; i++) {
-      smoothedTR = smoothedTR - (smoothedTR / this.period) + tr[i];
-      smoothedPlusDM = smoothedPlusDM - (smoothedPlusDM / this.period) + plusDM[i];
-      smoothedMinusDM = smoothedMinusDM - (smoothedMinusDM / this.period) + minusDM[i];
-
-      const plusDIValue = (smoothedPlusDM / smoothedTR) * 100;
-      const minusDIValue = (smoothedMinusDM / smoothedTR) * 100;
-      
-      this.plusDI.push(plusDIValue);
-      this.minusDI.push(minusDIValue);
-
-      const dx = Math.abs(plusDIValue - minusDIValue) / (plusDIValue + minusDIValue) * 100;
-      
-      if (this.values.length === 0) {
-        this.values.push(dx);
-      } else {
-        this.values.push(
-          (this.values[this.values.length - 1] * (this.period - 1) + dx) / this.period
-        );
-      }
-    }
-
-    return {
-      adx: this.values,
-      plusDI: this.plusDI,
-      minusDI: this.minusDI
-    };
-  }
-
-  getValue() {
-    return this.values[this.values.length - 1] || 0;
-  }
-
-  getTrend() {
-    const lastPlus = this.plusDI[this.plusDI.length - 1] || 0;
-    const lastMinus = this.minusDI[this.minusDI.length - 1] || 0;
-    
-    if (lastPlus > lastMinus) return 'BULLISH';
-    if (lastMinus > lastPlus) return 'BEARISH';
-    return 'NEUTRAL';
-  }
-
-  getStrength() {
-    const value = this.getValue();
-    if (value > 50) return 'VERY_STRONG';
-    if (value > 40) return 'STRONG';
-    if (value > 25) return 'MODERATE';
-    if (value > 20) return 'WEAK';
-    return 'ABSENT';
-  }
-
-  isTrending() {
-    return this.getValue() > 20;
-  }
-}
-
+// Wilder's ADX/DMI. Returns { adx, plusDI, minusDI } series aligned to input length.
 export function calculateADX(highs, lows, closes, period = 14) {
-  const adx = new ADX(period);
-  return adx.calculate(highs, lows, closes);
+  const n = highs.length
+  if (n < period + 1) {
+    return { adx: new Array(n).fill(20), plusDI: new Array(n).fill(0), minusDI: new Array(n).fill(0) }
+  }
+
+  const tr = trueRangeSeries(highs, lows, closes)
+  const plusDM = [0]
+  const minusDM = [0]
+
+  for (let i = 1; i < n; i++) {
+    const upMove = highs[i] - highs[i - 1]
+    const downMove = lows[i - 1] - lows[i]
+    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0)
+    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0)
+  }
+
+  // Wilder smoothing
+  const smooth = (arr) => {
+    const out = new Array(n).fill(0)
+    let seed = arr.slice(0, period).reduce((a, b) => a + b, 0)
+    out[period - 1] = seed
+    for (let i = period; i < n; i++) {
+      out[i] = out[i - 1] - out[i - 1] / period + arr[i]
+    }
+    for (let i = 0; i < period - 1; i++) out[i] = seed
+    return out
+  }
+
+  const smoothTR = smooth(tr)
+  const smoothPlusDM = smooth(plusDM)
+  const smoothMinusDM = smooth(minusDM)
+
+  const plusDI = smoothTR.map((trv, i) => (trv === 0 ? 0 : (smoothPlusDM[i] / trv) * 100))
+  const minusDI = smoothTR.map((trv, i) => (trv === 0 ? 0 : (smoothMinusDM[i] / trv) * 100))
+
+  const dx = plusDI.map((p, i) => {
+    const sum = p + minusDI[i]
+    return sum === 0 ? 0 : (Math.abs(p - minusDI[i]) / sum) * 100
+  })
+
+  // ADX = Wilder-smoothed DX
+  const adx = new Array(n).fill(0)
+  const dxSeed = dx.slice(period, period * 2).reduce((a, b) => a + b, 0) / period
+  const startIdx = Math.min(period * 2 - 1, n - 1)
+  adx[startIdx] = dxSeed
+  for (let i = startIdx + 1; i < n; i++) {
+    adx[i] = (adx[i - 1] * (period - 1) + dx[i]) / period
+  }
+  for (let i = 0; i < startIdx; i++) adx[i] = dxSeed
+
+  return { adx, plusDI, minusDI }
 }
+
+export function trendStrengthLabel(adxValue) {
+  if (adxValue >= 40) return 'VERY_STRONG'
+  if (adxValue >= 25) return 'STRONG'
+  if (adxValue >= 20) return 'MODERATE'
+  return 'WEAK'
+      }
