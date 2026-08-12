@@ -1,80 +1,29 @@
-export async function detectLiquiditySweep(highs, lows, closes) {
-  const currentPrice = closes[closes.length - 1];
-  
-  // Find equal highs and lows (liquidity pools)
-  const equalHighs = findEqualLevels(highs, 0.0005);
-  const equalLows = findEqualLevels(lows, 0.0005);
-  
-  const sweeps = [];
+import { findSwingPoints } from './marketStructure.js'
 
-  // Check for liquidity sweeps (price breaks level and reverses)
-  for (const level of equalHighs) {
-    const priceAbove = closes.some((c, i) => i > level.indices[level.indices.length - 1] && c > level.price);
-    const reversed = currentPrice < level.price;
-    
-    if (priceAbove && reversed) {
-      sweeps.push({
-        type: 'BUYSIDE_LIQUIDITY_SWEEP',
-        level: level.price,
-        swept: true,
-        reversed: true,
-        time: Date.now(),
-      });
-    }
+// A liquidity sweep: price wicks beyond a prior swing high/low (grabbing
+// stop-loss liquidity resting there) but the candle CLOSES back inside
+// the range — signaling a likely reversal/trap rather than a genuine break.
+export function detectLiquiditySweep(highs, lows, closes, strength = 3) {
+  const { swingHighs, swingLows } = findSwingPoints(highs, lows, strength)
+  const lastIndex = closes.length - 1
+  const lastHigh = highs[lastIndex]
+  const lastLow = lows[lastIndex]
+  const lastClose = closes[lastIndex]
+
+  const priorHighs = swingHighs.filter((s) => s.index < lastIndex - 1)
+  const priorLows = swingLows.filter((s) => s.index < lastIndex - 1)
+  const lastSwingHigh = priorHighs[priorHighs.length - 1]
+  const lastSwingLow = priorLows[priorLows.length - 1]
+
+  // Wicked above a swing high but closed back below it -> bearish sweep
+  if (lastSwingHigh && lastHigh > lastSwingHigh.price && lastClose < lastSwingHigh.price) {
+    return { type: 'LIQUIDITY_SWEEP', direction: 'SELL', sweptLevel: lastSwingHigh.price, source: 'liquiditySweep' }
   }
 
-  for (const level of equalLows) {
-    const priceBelow = closes.some((c, i) => i > level.indices[level.indices.length - 1] && c < level.price);
-    const reversed = currentPrice > level.price;
-    
-    if (priceBelow && reversed) {
-      sweeps.push({
-        type: 'SELLSIDE_LIQUIDITY_SWEEP',
-        level: level.price,
-        swept: true,
-        reversed: true,
-        time: Date.now(),
-      });
-    }
+  // Wicked below a swing low but closed back above it -> bullish sweep
+  if (lastSwingLow && lastLow < lastSwingLow.price && lastClose > lastSwingLow.price) {
+    return { type: 'LIQUIDITY_SWEEP', direction: 'BUY', sweptLevel: lastSwingLow.price, source: 'liquiditySweep' }
   }
 
-  return {
-    sweeps,
-    recentSweep: sweeps[sweeps.length - 1] || null,
-    hasRecentSweep: sweeps.length > 0,
-    buySideSweeps: sweeps.filter(s => s.type.includes('BUYSIDE')),
-    sellSideSweeps: sweeps.filter(s => s.type.includes('SELLSIDE')),
-  };
-}
-
-function findEqualLevels(prices, tolerance) {
-  const levels = [];
-  const used = new Set();
-
-  for (let i = 0; i < prices.length; i++) {
-    if (used.has(i)) continue;
-    
-    const level = {
-      price: prices[i],
-      indices: [i],
-      count: 1,
-    };
-
-    for (let j = i + 1; j < prices.length; j++) {
-      if (used.has(j)) continue;
-      
-      if (Math.abs(prices[j] - level.price) / level.price <= tolerance) {
-        level.indices.push(j);
-        level.count++;
-        used.add(j);
-      }
-    }
-
-    if (level.count >= 2) {
-      level.price = level.indices.reduce((sum, idx) => sum + prices[idx], 0) / level.count;
-      levels.push(level);
-    }
-  }
-
-  return levels;
+  return null
 }
