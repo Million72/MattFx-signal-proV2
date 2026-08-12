@@ -1,128 +1,89 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { AdvancedSignalGenerator } from '../engine/advancedSignalGenerator';
-import { SignalManager } from '../engine/signalManager';
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { scanAllMarketsLive } from '../engine/liveScanner.js'
+import { ALL_MARKETS } from '../constants/markets.js'
 
-export function useSignalEngine(marketData, selectedTimeframe, marketType) {
-  const [signals, setSignals] = useState({
-    current: null,
-    active: [],
-    history: [],
-    quality: {
-      trend: 0,
-      momentum: 0,
-      volatility: 0,
-      volume: 0,
-      mtfConfluence: 0,
-    },
-  });
-  const [activeSignals, setActiveSignals] = useState([]);
-  const [performance, setPerformance] = useState(null);
-  
-  const signalGeneratorRef = useRef(null);
-  const signalManagerRef = useRef(null);
+const SCAN_INTERVAL_MS = 10 * 60 * 1000 // matches the "next X:XX" countdown
 
+export function useSignalEngine(timeframe, isConnected) {
+  const [signals, setSignals] = useState([])
+  const [scanning, setScanning] = useState(false)
+  const [progress, setProgress] = useState({ current: 0, total: 0 })
+  const [lastScan, setLastScan] = useState(null)
+  const [error, setError] = useState(null)
+  const [, forceTick] = useState(0)
+
+  const scanningRef = useRef(false)
+
+  const scan = useCallback(async () => {
+    if (scanningRef.current || !isConnected) return
+    scanningRef.current = true
+    setScanning(true)
+    setError(null)
+    setProgress({ current: 0, total: ALL_MARKETS.length })
+
+    try {
+      const results = await scanAllMarketsLive(ALL_MARKETS, timeframe, {
+        onProgress: setProgress
+      })
+      setSignals(results)
+      setLastScan(Date.now())
+    } catch (err) {
+      console.error('Scan failed:', err)
+      setError(err.message || 'Scan failed')
+    } finally {
+      setScanning(false)
+      scanningRef.current = false
+    }
+  }, [timeframe, isConnected])
+
+  // Auto-scan the moment the connection is ready — no button click needed.
   useEffect(() => {
-    signalGeneratorRef.current = new AdvancedSignalGenerator({
-      minConfidenceThreshold: 75,
-      minTimeframeConfluence: 3,
-      requireMTFConfirmation: true,
-      requireHTFAlignment: true,
-      maxSignalsPerHour: 5,
-    });
+    if (isConnected) scan()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected])
 
-    signalManagerRef.current = new SignalManager();
-
-    return () => {
-      // Cleanup
-    };
-  }, []);
-
+  // Auto-scan whenever the timeframe changes (only after the initial
+  // connect-triggered scan has already happened at least once).
+  const didMountRef = useRef(false)
   useEffect(() => {
-    if (!marketData?.current || !signalGeneratorRef.current) return;
+    if (!didMountRef.current) {
+      didMountRef.current = true
+      return
+    }
+    if (isConnected) scan()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeframe])
 
-    const generateSignal = async () => {
-      try {
-        const signal = await signalGeneratorRef.current.generateSignal(
-          marketData,
-          selectedTimeframe,
-          marketType
-        );
+  const nextScanAt = lastScan ? lastScan + SCAN_INTERVAL_MS : 0
+  const cooldownSeconds = Math.max(0, Math.ceil((nextScanAt - Date.now()) / 1000))
 
-        setSignals(prev => ({
-          ...prev,
-          current: signal,
-          active: signal.type !== 'NO_SIGNAL' 
-            ? [...prev.active.slice(-19), signal]
-            : prev.active,
-          history: [...prev.history.slice(-99), signal],
-          quality: calculateQualityMetrics(signal, marketData),
-        }));
-
-        // Update active signals
-        if (signal.type !== 'NO_SIGNAL') {
-          setActiveSignals(prev => [...prev.slice(-9), signal]);
-        }
-
-        // Update performance metrics
-        updatePerformance();
-      } catch (error) {
-        console.error('Signal generation error:', error);
+  // Countdown ticks every second; when it reaches zero, auto-rescan
+  // without waiting for the person to press anything.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      forceTick((t) => t + 1)
+      if (lastScan && Date.now() >= lastScan + SCAN_INTERVAL_MS && !scanningRef.current && isConnected) {
+        scan()
       }
-    };
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [lastScan, isConnected, scan])
 
-    // Debounce signal generation
-    const timeoutId = setTimeout(generateSignal, 1000);
-    return () => clearTimeout(timeoutId);
-  }, [marketData?.current?.close, selectedTimeframe, marketType]);
-
-  const updatePerformance = useCallback(() => {
-    if (!signalManagerRef.current) return;
-
-    const report = signalManagerRef.current.getPerformanceReport();
-    setPerformance({
-      winRate: report.winRate,
-      totalTrades: report.totalTrades,
-      winningTrades: report.winningTrades,
-      losingTrades: report.losingTrades,
-      totalPnL: report.totalPnL,
-      averageWin: report.averageWin,
-      averageLoss: report.averageLoss,
-      profitFactor: report.profitFactor,
-      sharpeRatio: report.sharpeRatio,
-      maxDrawdown: report.maxDrawdown,
-      averageRR: report.averageRR,
-      consecutiveWins: report.consecutiveWins,
-      consecutiveLosses: report.consecutiveLosses,
-      expectancy: report.expectancy,
-      systemQuality: report.systemQuality,
-    });
-  }, []);
+  const buyCount = signals.filter((s) => s.status === 'BUY').length
+  const sellCount = signals.filter((s) => s.status === 'SELL').length
+  const waitCount = signals.filter((s) => s.status === 'WAIT').length
 
   return {
     signals,
-    activeSignals,
-    performance,
-  };
+    scanning,
+    progress,
+    error,
+    scan, // still exposed for a manual "Scan Now" override
+    cooldownSeconds,
+    lastScan,
+    liveCount: signals.length,
+    buyCount,
+    sellCount,
+    waitCount
+  }
 }
-
-function calculateQualityMetrics(signal, marketData) {
-  if (!signal || signal.type === 'NO_SIGNAL') {
-    return {
-      trend: 0,
-      momentum: 0,
-      volatility: 0,
-      volume: 0,
-      mtfConfluence: 0,
-    };
-  }
-
-  return {
-    trend: signal.components?.trendStrength || 0,
-    momentum: signal.components?.momentum || 0,
-    volatility: signal.components?.volatility || 0,
-    volume: signal.components?.volume || 0,
-    mtfConfluence: signal.multiTimeframe?.confluenceCount 
-      ? (signal.multiTimeframe.confluenceCount / 7) * 100 
-      : 0,
-  };
-  }
