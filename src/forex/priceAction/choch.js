@@ -1,70 +1,30 @@
-export async function detectCHoCH(highs, lows, closes) {
-  // CHoCH (Change of Character) - When market structure shifts
-  const swingHighs = findSwings(highs, 'high');
-  const swingLows = findSwings(lows, 'low');
-  
-  if (swingHighs.length < 3 || swingLows.length < 3) {
-    return { detected: false, direction: null, recent: false };
+import { findSwingPoints, structureBias } from './marketStructure.js'
+
+// Change of Character: structure was trending one way, then breaks the
+// most recent counter-trend swing point, signaling a potential reversal.
+// This differs from BOS which confirms continuation of existing structure.
+export function detectCHoCH(highs, lows, closes, strength = 3) {
+  const { swingHighs, swingLows } = findSwingPoints(highs, lows, strength)
+  if (swingHighs.length < 2 || swingLows.length < 2) return null
+
+  const priorBias = structureBias(swingHighs.slice(0, -1), swingLows.slice(0, -1))
+  const lastClose = closes[closes.length - 1]
+  const lastIndex = closes.length - 1
+
+  const priorHighs = swingHighs.filter((s) => s.index < lastIndex - 1)
+  const priorLows = swingLows.filter((s) => s.index < lastIndex - 1)
+  const lastSwingHigh = priorHighs[priorHighs.length - 1]
+  const lastSwingLow = priorLows[priorLows.length - 1]
+
+  // Was bearish, now breaks above the last swing high -> bullish CHoCH
+  if (priorBias === 'BEARISH' && lastSwingHigh && lastClose > lastSwingHigh.price) {
+    return { type: 'CHOCH', direction: 'BUY', brokenLevel: lastSwingHigh.price, source: 'choch' }
   }
 
-  const patterns = [];
-
-  // Bullish CHoCH: Higher Low formed after a Lower Low
-  for (let i = 2; i < swingLows.length; i++) {
-    const low1 = swingLows[i - 2];
-    const low2 = swingLows[i - 1];
-    const low3 = swingLows[i];
-    
-    if (low2.price < low1.price && low3.price > low2.price) {
-      patterns.push({
-        type: 'BULLISH_CHOCH',
-        price: low3.price,
-        index: low3.index,
-        description: 'Change from bearish to bullish structure',
-        time: Date.now(),
-      });
-    }
+  // Was bullish, now breaks below the last swing low -> bearish CHoCH
+  if (priorBias === 'BULLISH' && lastSwingLow && lastClose < lastSwingLow.price) {
+    return { type: 'CHOCH', direction: 'SELL', brokenLevel: lastSwingLow.price, source: 'choch' }
   }
 
-  // Bearish CHoCH: Lower High formed after a Higher High
-  for (let i = 2; i < swingHighs.length; i++) {
-    const high1 = swingHighs[i - 2];
-    const high2 = swingHighs[i - 1];
-    const high3 = swingHighs[i];
-    
-    if (high2.price > high1.price && high3.price < high2.price) {
-      patterns.push({
-        type: 'BEARISH_CHOCH',
-        price: high3.price,
-        index: high3.index,
-        description: 'Change from bullish to bearish structure',
-        time: Date.now(),
-      });
-    }
-  }
-
-  const lastCHoCH = patterns[patterns.length - 1];
-  const isRecent = lastCHoCH && (highs.length - lastCHoCH.index) < 8;
-
-  return {
-    detected: patterns.length > 0,
-    direction: lastCHoCH?.type?.includes('BULLISH') ? 'BULLISH' : 'BEARISH',
-    recent: isRecent,
-    count: patterns.length,
-    lastChange: lastCHoCH,
-    all: patterns,
-  };
-}
-
-function findSwings(prices, type, period = 5) {
-  const swings = [];
-  for (let i = period; i < prices.length - period; i++) {
-    const slice = prices.slice(i - period, i + period + 1);
-    if (type === 'high' && prices[i] === Math.max(...slice)) {
-      swings.push({ price: prices[i], index: i });
-    } else if (type === 'low' && prices[i] === Math.min(...slice)) {
-      swings.push({ price: prices[i], index: i });
-    }
-  }
-  return swings;
+  return null
 }
