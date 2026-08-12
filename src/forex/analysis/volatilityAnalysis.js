@@ -1,66 +1,25 @@
-import { ATR } from '../../indicators/atr';
-import { calculateBollingerBands } from '../../utils/math';
+import { calculateATRSeries, atrPercent } from '../../indicators/atr.js'
+import { mean, stddev } from '../../utils/math.js'
 
-export async function volatilityAnalysis(highs, lows, closes) {
-  const atr = new ATR(14);
-  const atrValues = atr.calculate(highs, lows, closes);
-  const atrValue = atr.getValue();
-  const atrPercentile = atr.getPercentile();
-  const volatilityRegime = atr.getVolatilityRegime();
-  
-  const currentPrice = closes[closes.length - 1];
-  const normalizedATR = (atrValue / currentPrice) * 100;
+export function analyzeVolatility(highs, lows, closes, lookback = 30) {
+  const atrSeries = calculateATRSeries(highs, lows, closes)
+  const recent = atrSeries.slice(-lookback)
+  const currentAtr = atrSeries[atrSeries.length - 1]
+  const avgAtr = mean(recent)
+  const atrStd = stddev(recent)
+  const price = closes[closes.length - 1]
 
-  // Bollinger Bands
-  const bb = calculateBollingerBands(closes, 20, 2);
-  
-  // Calculate BB width
-  const bbWidth = ((bb.upper[bb.upper.length - 1] - bb.lower[bb.lower.length - 1]) / bb.middle[bb.middle.length - 1]) * 100;
-  
-  // Check for squeeze
-  const recentBBWidth = [];
-  for (let i = Math.max(0, bb.upper.length - 20); i < bb.upper.length; i++) {
-    recentBBWidth.push(
-      ((bb.upper[i] - bb.lower[i]) / bb.middle[i]) * 100
-    );
-  }
-  
-  const minBBWidth = Math.min(...recentBBWidth);
-  const isSqueezing = bbWidth < minBBWidth * 1.1;
+  const zScore = atrStd === 0 ? 0 : (currentAtr - avgAtr) / atrStd
 
-  // Determine volatility state
-  let state = 'NORMAL';
-  let riskLevel = 'MEDIUM';
-
-  if (isSqueezing) {
-    state = 'SQUEEZE';
-    riskLevel = 'HIGH';
-  } else if (volatilityRegime === 'HIGH') {
-    state = 'EXPANDING';
-    riskLevel = 'HIGH';
-  } else if (volatilityRegime === 'LOW') {
-    state = 'CONTRACTING';
-    riskLevel = 'LOW';
-  } else if (atrPercentile > 70) {
-    state = 'ELEVATED';
-    riskLevel = 'MEDIUM_HIGH';
-  }
+  let regime = 'NORMAL'
+  if (zScore > 1.5) regime = 'EXPANDING'
+  else if (zScore < -1) regime = 'CONTRACTING'
 
   return {
-    state,
-    riskLevel,
-    atr: atrValue,
-    normalizedATR,
-    atrPercentile,
-    regime: volatilityRegime,
-    bollingerBands: {
-      upper: bb.upper[bb.upper.length - 1],
-      middle: bb.middle[bb.middle.length - 1],
-      lower: bb.lower[bb.lower.length - 1],
-      width: bbWidth,
-      percentB: bb.percentB,
-      squeezing: isSqueezing,
-    },
-    isTradeable: !isSqueezing && volatilityRegime !== 'LOW',
-  };
+    atr: currentAtr,
+    atrPct: atrPercent(currentAtr, price),
+    avgAtr,
+    zScore: Number(zScore.toFixed(2)),
+    regime
+  }
 }
