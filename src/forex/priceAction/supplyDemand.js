@@ -1,93 +1,64 @@
-export async function identifySupplyDemand(highs, lows, closes, volumes) {
-  const zones = [];
-  const currentPrice = closes[closes.length - 1];
-  
-  // Find rally-base-rally and drop-base-drop patterns
-  for (let i = 10; i < closes.length - 10; i++) {
-    // Check for supply zone (drop-base-drop)
-    if (isSupplyZone(highs, lows, closes, i)) {
-      zones.push({
-        type: 'SUPPLY',
-        price: highs[i],
-        low: lows[i],
-        index: i,
-        strength: calculateZoneStrength(highs, lows, closes, volumes, i, 'SUPPLY'),
-        active: highs[i] > currentPrice,
-      });
-    }
-    
-    // Check for demand zone (rally-base-rally)
-    if (isDemandZone(highs, lows, closes, i)) {
-      zones.push({
-        type: 'DEMAND',
-        price: lows[i],
-        high: highs[i],
-        index: i,
-        strength: calculateZoneStrength(highs, lows, closes, volumes, i, 'DEMAND'),
-        active: lows[i] < currentPrice,
-      });
+import { calculateATR } from '../../indicators/atr.js'
+
+// Identifies supply/demand zones from strong directional (imbalance)
+// candles — a candle with a large body relative to ATR, followed by
+// continuation, marks the origin of institutional order flow.
+// Zones are checked for staleness using ATR distance so old zones far
+// from current price never fire (the bug fixed after live testing).
+
+export function findSupplyDemandZones(highs, lows, closes, opens, { lookback = 40, bodyAtrMultiplier = 1.2 } = {}) {
+  const atr = calculateATR(highs, lows, closes)
+  const zones = []
+
+  const start = Math.max(1, closes.length - lookback)
+  for (let i = start; i < closes.length - 1; i++) {
+    const body = Math.abs(closes[i] - opens[i])
+    if (body < atr * bodyAtrMultiplier) continue
+
+    const bullish = closes[i] > opens[i]
+    zones.push({
+      index: i,
+      type: bullish ? 'DEMAND' : 'SUPPLY',
+      top: Math.max(opens[i], closes[i]),
+      bottom: Math.min(opens[i], closes[i])
+    })
+  }
+
+  return zones
+}
+
+export function nearestZoneSignal(zones, currentPrice, atr, maxAtrDistance = 2) {
+  if (!zones.length || !atr) return null
+
+  let closest = null
+  let closestDistance = Infinity
+
+  for (const zone of zones) {
+    const mid = (zone.top + zone.bottom) / 2
+    const distance = Math.abs(currentPrice - mid)
+    if (distance < closestDistance) {
+      closest = zone
+      closestDistance = distance
     }
   }
 
-  const supplyZones = zones
-    .filter(z => z.type === 'SUPPLY' && z.active)
-    .sort((a, b) => b.strength - a.strength)
-    .slice(0, 3);
+  if (!closest) return null
 
-  const demandZones = zones
-    .filter(z => z.type === 'DEMAND' && z.active)
-    .sort((a, b) => b.strength - a.strength)
-    .slice(0, 3);
+  // Staleness guard: if the nearest zone is further than maxAtrDistance
+  // ATRs away, it's stale and must not fire a signal.
+  const distanceInAtr = closestDistance / atr
+  if (distanceInAtr > maxAtrDistance) {
+    return { staleZone: true, zone: closest }
+  }
+
+  const inZone = currentPrice <= closest.top && currentPrice >= closest.bottom
+  if (!inZone) return { staleZone: false, zone: closest, triggered: false }
 
   return {
-    supplyZones,
-    demandZones,
-    nearestSupply: supplyZones[0] || null,
-    nearestDemand: demandZones[0] || null,
-    totalZones: zones.length,
-  };
-}
-
-function isSupplyZone(highs, lows, closes, index) {
-  // Drop-base-drop pattern
-  const leftDrop = closes[index - 1] < closes[index - 2];
-  const base = Math.abs(closes[index] - closes[index - 1]) < Math.abs(closes[index - 1] - closes[index - 2]) * 0.3;
-  const rightDrop = closes[index + 1] < closes[index];
-  
-  return leftDrop && base && rightDrop && highs[index] > highs[index - 1];
-}
-
-function isDemandZone(highs, lows, closes, index) {
-  // Rally-base-rally pattern
-  const leftRally = closes[index - 1] > closes[index - 2];
-  const base = Math.abs(closes[index] - closes[index - 1]) < Math.abs(closes[index - 1] - closes[index - 2]) * 0.3;
-  const rightRally = closes[index + 1] > closes[index];
-  
-  return leftRally && base && rightRally && lows[index] < lows[index - 1];
-}
-
-function calculateZoneStrength(highs, lows, closes, volumes, index, type) {
-  let strength = 50;
-  
-  // Volume at zone
-  if (volumes && volumes[index] > volumes[index - 1]) strength += 15;
-  
-  // Zone size (smaller = stronger)
-  const zoneSize = Math.abs(highs[index] - lows[index]);
-  const avgSize = calculateAverageRange(highs, lows, 20);
-  if (zoneSize < avgSize * 0.5) strength += 15;
-  
-  // Price rejection
-  if (type === 'SUPPLY' && closes[index + 1] < lows[index]) strength += 20;
-  if (type === 'DEMAND' && closes[index + 1] > highs[index]) strength += 20;
-  
-  return Math.min(100, strength);
-}
-
-function calculateAverageRange(highs, lows, period) {
-  let sum = 0;
-  for (let i = Math.max(0, highs.length - period); i < highs.length; i++) {
-    sum += Math.abs(highs[i] - lows[i]);
+    staleZone: false,
+    zone: closest,
+    triggered: true,
+    direction: closest.type === 'DEMAND' ? 'BUY' : 'SELL',
+    source: 'supplyDemand'
   }
-  return sum / Math.min(period, highs.length);
 }
