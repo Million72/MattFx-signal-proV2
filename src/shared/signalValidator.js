@@ -1,137 +1,62 @@
-export class SignalValidator {
-  constructor() {
-    this.rules = [
-      this.validateTrendConsistency,
-      this.validateMomentumAlignment,
-      this.validateVolatilityBounds,
-      this.validatePriceStructure,
-      this.validateRiskReward,
-      this.validateMarketHours,
-    ];
+import { CONFIDENCE_FLOOR } from './confidenceScore.js'
+import { MIN_ACCEPTABLE_RR } from './tpSlCalculator.js'
+
+// Zero-tolerance gate: ANY one of these failing kills the signal
+// entirely. This mirrors the philosophy that worked in practice —
+// one disqualifying condition kills the trade, no partial credit.
+
+export function validateSignal(candidate) {
+  const failures = []
+
+  if (!candidate) {
+    return { valid: false, failures: ['no_candidate'] }
   }
 
-  async validate(signal, marketData) {
-    const results = [];
-    let passed = true;
-
-    for (const rule of this.rules) {
-      const result = rule.call(this, signal, marketData);
-      results.push({
-        rule: rule.name,
-        passed: result.passed,
-        message: result.message,
-      });
-
-      if (!result.passed) {
-        passed = false;
-        if (result.critical) break;
-      }
-    }
-
-    return {
-      isValid: passed,
-      results,
-      passedCount: results.filter(r => r.passed).length,
-      failedCount: results.filter(r => !r.passed).length,
-    };
+  if (!candidate.direction || candidate.direction === 'NEUTRAL') {
+    failures.push('no_direction')
   }
 
-  validateTrendConsistency(signal, marketData) {
-    const trend = marketData?.trend;
-    if (!trend) return { passed: false, message: 'No trend data', critical: true };
-
-    const directionMatch = 
-      (signal.direction === 'BUY' && trend.direction.includes('BULLISH')) ||
-      (signal.direction === 'SELL' && trend.direction.includes('BEARISH'));
-
-    return {
-      passed: directionMatch,
-      message: directionMatch ? 'Trend aligned' : 'Trend not aligned with signal',
-      critical: true,
-    };
+  if (typeof candidate.confidence !== 'number' || candidate.confidence < CONFIDENCE_FLOOR) {
+    failures.push('below_confidence_floor')
   }
 
-  validateMomentumAlignment(signal, marketData) {
-    const momentum = marketData?.momentum;
-    if (!momentum) return { passed: false, message: 'No momentum data', critical: false };
-
-    const alignment = 
-      (signal.direction === 'BUY' && momentum.signal.includes('BUY')) ||
-      (signal.direction === 'SELL' && momentum.signal.includes('SELL'));
-
-    return {
-      passed: alignment,
-      message: alignment ? 'Momentum confirms' : 'Momentum does not confirm',
-      critical: false,
-    };
+  if (typeof candidate.riskReward !== 'number' || candidate.riskReward < MIN_ACCEPTABLE_RR) {
+    failures.push('rr_too_low')
   }
 
-  validateVolatilityBounds(signal, marketData) {
-    const volatility = marketData?.volatility;
-    if (!volatility) return { passed: false, message: 'No volatility data', critical: false };
-
-    const withinBounds = volatility.isTradeable;
-
-    return {
-      passed: withinBounds,
-      message: withinBounds ? 'Volatility acceptable' : 'Volatility outside bounds',
-      critical: false,
-    };
+  if (!candidate.entryModelConfirmed) {
+    failures.push('no_entry_model')
   }
 
-  validatePriceStructure(signal, marketData) {
-    const structure = marketData?.structure;
-    if (!structure) return { passed: false, message: 'No structure data', critical: false };
-
-    const validStructure = structure.quality !== 'LOW';
-
-    return {
-      passed: validStructure,
-      message: validStructure ? 'Structure valid' : 'Poor market structure',
-      critical: false,
-    };
+  if (candidate.conflictingSignal) {
+    failures.push('conflicting_direction_detected')
   }
 
-  validateRiskReward(signal) {
-    const minRR = 1.5;
-    const rr = parseFloat(signal.riskReward);
-
-    return {
-      passed: rr >= minRR,
-      message: rr >= minRR ? 
-        `Good R:R (1:${rr})` : 
-        `Poor R:R (1:${rr}), minimum 1:${minRR} required`,
-      critical: true,
-    };
+  if (candidate.staleZone) {
+    failures.push('stale_zone_out_of_range')
   }
 
-  validateMarketHours(signal) {
-    const now = new Date();
-    const day = now.getUTCDay();
-    const hour = now.getUTCHours();
+  if (!candidate.htfAligned) {
+    failures.push('htf_not_aligned')
+  }
 
-    // Weekend check
-    if (day === 0 || day === 6) {
-      return {
-        passed: false,
-        message: 'Market closed (weekend)',
-        critical: true,
-      };
-    }
+  if (typeof candidate.entry !== 'number' || typeof candidate.stopLoss !== 'number' || typeof candidate.takeProfit !== 'number') {
+    failures.push('invalid_price_levels')
+  }
 
-    // Low liquidity hours
-    if (hour >= 21 || hour < 1) {
-      return {
-        passed: false,
-        message: 'Low liquidity period',
-        critical: false,
-      };
-    }
+  // Sanity: SL and TP must sit on the correct side of entry for the direction
+  if (candidate.direction === 'BUY') {
+    if (candidate.stopLoss >= candidate.entry) failures.push('sl_wrong_side')
+    if (candidate.takeProfit <= candidate.entry) failures.push('tp_wrong_side')
+  }
+  if (candidate.direction === 'SELL') {
+    if (candidate.stopLoss <= candidate.entry) failures.push('sl_wrong_side')
+    if (candidate.takeProfit >= candidate.entry) failures.push('tp_wrong_side')
+  }
 
-    return {
-      passed: true,
-      message: 'Market hours valid',
-      critical: false,
-    };
+  return {
+    valid: failures.length === 0,
+    failures
   }
 }
+
