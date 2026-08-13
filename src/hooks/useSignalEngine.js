@@ -73,6 +73,12 @@ export function useSignalEngine(timeframe, isConnected) {
   const sellCount = signals.filter((s) => s.status === 'SELL').length
   const waitCount = signals.filter((s) => s.status === 'WAIT').length
 
+  // If nearly everything came back as an error, this is a systemic
+  // connectivity/rate-limit issue, not "the market has no data" —
+  // surfaced as one clear banner instead of many identical broken cards.
+  const errorCount = signals.filter((s) => s.error).length
+  const isSystemicFailure = signals.length > 0 && errorCount / signals.length > 0.7
+
   return {
     signals,
     scanning,
@@ -84,6 +90,7 @@ export function useSignalEngine(timeframe, isConnected) {
     liveCount: signals.length,
     buyCount,
     sellCount,
-    waitCount
+    waitCount,
+    isSystemicFailure
   }
-}
+    }
