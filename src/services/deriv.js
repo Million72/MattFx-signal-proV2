@@ -3,78 +3,163 @@ import { GRANULARITY_MAP } from '../constants/timeframes.js'
 import { toDerivSymbol } from '../constants/markets.js'
 import { stripUnclosedCandle, genId, sleep } from '../utils/helpers.js'
 
+// Deriv's current official WebSocket endpoint is ws.derivws.com — this
+// project previously pointed at ws.binaryws.com, the older Binary.com
+// domain from before Deriv's rebrand. That stale endpoint can fail
+// consistently (not just under load), which looks identical to rate-
+// limiting but doesn't recover with retries/backoff the way real
+// throttling does. This is the corrected, current endpoint.
+//
 // app_id=1089 is Deriv's SHARED PUBLIC DEMO app id — it's used by
-// countless unrelated tutorials and apps worldwide, and gets rate-
-// limited hard because of that shared load. Symptoms look exactly like
-// "no data available" on every symbol at once, even though the data
-// genuinely exists — it's a request-throttling failure, not a data gap.
-//
-// Register your own free app_id at https://api.deriv.com (Deriv account
-// -> Settings -> API Token / Register Application) and replace the
-// value below. A personal app_id gets its own rate-limit bucket instead
-// of sharing one with the entire internet.
-const APP_ID = "1089";
+// countless unrelated tutorials and apps worldwide, and can still get
+// rate-limited under real load even on the correct endpoint. Register
+// your own free app_id at https://api.deriv.com (Deriv account ->
+// Settings -> API Token / Register Application) and replace the value
+// below for a dedicated rate-limit bucket.
+const DERIV_APP_ID = 1089
+const DERIV_WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${DERIV_APP_ID}`
 
-export function derivWS(request, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`wss://ws.binaryws.com/websockets/v3?app_id=${APP_ID}`);
-    const timer = setTimeout(() => { ws.close(); reject(new Error("Timeout")); }, timeoutMs);
-    ws.onopen    = () => ws.send(JSON.stringify(request));
-    ws.onmessage = (e) => {
-      clearTimeout(timer); ws.close();
-      try {
-        const d = JSON.parse(e.data);
-        if (d.error) return reject(new Error(d.error.message));
-        resolve(d);
-      } catch (err) { reject(err); }
-    };
-    ws.onerror = () => { clearTimeout(timer); reject(new Error("WS error")); };
-  });
-}
+const MAX_RETRIES = 3
+const RETRY_BASE_DELAY_MS = 1000
 
-// Anti-repainting fix: Deriv's ticks_history with end:"latest" always returns
-// the current, STILL-FORMING candle as the last element — its close price
-// changes on every tick. If the engine analyzes that candle, a signal can
-// silently flip between scans as price moves within the same unfinished bar,
-// with no record that anything changed. We strip it here, at the single
-// source all data flows through, so nothing downstream can ever see it.
-//
-// A candle is "closed" once real time has passed its own duration
-// (epoch + granularity <= now). We double-check this by time rather than
-// just "drop the last one," in case Deriv ever returns a fully-closed final
-// candle (e.g. right at a boundary) — we don't want to discard real data.
-export async function fetchCandles(derivSymbol, granularity, count = 300) {
-  // Request one extra candle so that after dropping the forming one we still
-  // return the full requested `count` of genuinely closed candles.
-  const d = await derivWS({
-    ticks_history: derivSymbol, adjust_start_time: 1,
-    count: count + 1, end: "latest", granularity, style: "candles",
-  });
-
-  const nowSeconds = Date.now() / 1000;
-  let candles = (d.candles || []).map(c => ({
-    open: +c.open, high: +c.high, low: +c.low, close: +c.close, time: c.epoch * 1000,
-    epoch: c.epoch,
-  }));
-
-  // Drop any trailing candle(s) that haven't fully closed yet.
-  while (candles.length > 0 && (candles[candles.length - 1].epoch + granularity) > nowSeconds) {
-    candles.pop();
+class DerivService {
+  constructor() {
+    this.socket = new ReconnectingSocket(DERIV_WS_URL)
   }
 
-  // Trim back down to the requested count (we over-fetched by 1 above).
-  if (candles.length > count) {
-    candles = candles.slice(candles.length - count);
+  get isConnected() {
+    return this.socket.isConnected
   }
 
-  // Strip the internal epoch field before returning — not part of the public candle shape.
-  candles = candles.map(({ open, high, low, close, time }) => ({ open, high, low, close, time }));
+  onStatusChange(cb) {
+    this.socket.onStatusChange = cb
+  }
 
-  // livePrice: the close of the last CLOSED candle. This is intentionally
-  // NOT the current live tick — using the live tick here would reintroduce
-  // exactly the repainting behavior this fix removes, since price at that
-  // instant is unstable and doesn't correspond to a fixed point in time.
-  const livePrice = candles.length ? candles[candles.length - 1].close : null;
+  async connect() {
+    if (this.isConnected) return
+    await this.socket.connect()
+  }
 
-  return { candles, livePrice };
+  disconnect() {
+    this.socket.disconnect()
+  }
+
+  /**
+   * Fetch closed candles for a display symbol (e.g. 'VOL10').
+   * Translates to the real Deriv symbol internally, strips the
+   * still-forming last candle to prevent repainting, and retries with
+   * backoff on failure — a single dropped/rate-limited request should
+   * not silently show as "no data" when a retry would succeed.
+   */
+  async getCandles(displaySymbol, timeframe, count = 150) {
+    let lastError = 'unknown'
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const result = await this._getCandlesOnce(displaySymbol, timeframe, count)
+      if (!result.error) return result
+
+      lastError = result.error
+      // Not worth retrying if we're simply not connected — that needs
+      // a reconnect, not a request retry.
+      if (result.error === 'not_connected') break
+
+      if (attempt < MAX_RETRIES) {
+        const jitter = Math.random() * 300
+        await sleep(RETRY_BASE_DELAY_MS * (attempt + 1) + jitter)
+      }
+    }
+
+    return { candles: [], error: lastError }
+  }
+
+  async _getCandlesOnce(displaySymbol, timeframe, count) {
+    const derivSymbol = toDerivSymbol(displaySymbol)
+    const granularity = GRANULARITY_MAP[timeframe] || 60
+    const reqId = genId('candles')
+
+    return new Promise((resolve) => {
+      const handler = (data) => {
+        this.socket.removeListener(reqId, handler)
+
+        if (data.error) {
+          console.error(`Deriv error for ${displaySymbol} (${derivSymbol}):`, data.error.message)
+          resolve({ candles: [], error: data.error.message })
+          return
+        }
+
+        if (!data.candles || data.candles.length === 0) {
+          resolve({ candles: [], error: 'no_data' })
+          return
+        }
+
+        const parsed = data.candles.map((c) => ({
+          time: parseInt(c.epoch, 10) * 1000,
+          open: parseFloat(c.open),
+          high: parseFloat(c.high),
+          low: parseFloat(c.low),
+          close: parseFloat(c.close),
+          volume: c.volume ? parseFloat(c.volume) : 0
+        }))
+
+        resolve({ candles: stripUnclosedCandle(parsed), error: null })
+      }
+
+      this.socket.addListener(reqId, handler)
+
+      const sent = this.socket.send({
+        ticks_history: derivSymbol,
+        granularity,
+        count: count + 1, // +1 because we strip the unclosed candle
+        end: 'latest',
+        style: 'candles',
+        req_id: reqId
+      })
+
+      if (!sent) {
+        this.socket.removeListener(reqId, handler)
+        resolve({ candles: [], error: 'not_connected' })
+        return
+      }
+
+      setTimeout(() => {
+        this.socket.removeListener(reqId, handler)
+        resolve({ candles: [], error: 'timeout' })
+      }, 12000)
+    })
+  }
+
+  /**
+   * Fetch the current spot price for a display symbol via a single tick.
+   */
+  async getCurrentPrice(displaySymbol) {
+    const derivSymbol = toDerivSymbol(displaySymbol)
+    const reqId = genId('tick')
+
+    return new Promise((resolve) => {
+      const handler = (data) => {
+        this.socket.removeListener(reqId, handler)
+        if (data.error || !data.tick) {
+          resolve(null)
+          return
+        }
+        resolve(parseFloat(data.tick.quote))
+      }
+
+      this.socket.addListener(reqId, handler)
+      const sent = this.socket.send({ ticks: derivSymbol, req_id: reqId, subscribe: 0 })
+
+      if (!sent) {
+        this.socket.removeListener(reqId, handler)
+        resolve(null)
+        return
+      }
+
+      setTimeout(() => {
+        this.socket.removeListener(reqId, handler)
+        resolve(null)
+      }, 8000)
+    })
+  }
 }
+
+export const derivService = new DerivService()
