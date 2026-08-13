@@ -16,7 +16,7 @@ import { stripUnclosedCandle, genId, sleep } from '../utils/helpers.js'
 // your own free app_id at https://api.deriv.com (Deriv account ->
 // Settings -> API Token / Register Application) and replace the value
 // below for a dedicated rate-limit bucket.
-const DERIV_APP_ID = 1089
+const DERIV_APP_ID = 346FVETnQPomWGtjKqK2T
 const DERIV_WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${DERIV_APP_ID}`
 
 const MAX_RETRIES = 3
