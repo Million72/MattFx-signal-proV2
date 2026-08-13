@@ -3,7 +3,9 @@ import { runFactorVotes, classifyStatus } from '../shared/factorVotes.js'
 import { calculateTpSlLadder, distanceToPips } from '../shared/tpSlCalculator.js'
 import { analyzeTrend } from '../forex/analysis/trendAnalysis.js'
 import { marketCategory } from '../constants/markets.js'
-import { genId } from '../utils/helpers.js'
+import { genId, sleep } from '../utils/helpers.js'
+
+const BATCH_PAUSE_MS = 400 // paces requests so a shared rate-limited app_id doesn't reject a whole burst
 
 /**
  * Scans a single symbol and returns a full snapshot regardless of
@@ -86,9 +88,13 @@ export async function scanMarketSnapshot(symbol, timeframe) {
   }
 }
 
-export async function scanAllMarketsLive(symbols, timeframe, { onProgress, batchSize = 4 } = {}) {
+export async function scanAllMarketsLive(symbols, timeframe, { onProgress, batchSize = 2 } = {}) {
   const results = []
   let completed = 0
+  let consecutiveErrors = 0
+  let systemicBackoffs = 0
+  const MAX_SYSTEMIC_BACKOFFS = 2
+  const SYSTEMIC_ERROR_THRESHOLD = 4 // this many failures in a row = not bad luck, it's rate-limiting
 
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize)
@@ -104,10 +110,29 @@ export async function scanAllMarketsLive(symbols, timeframe, { onProgress, batch
         timestamp: Date.now()
       })))
     )
+
+    for (const r of batchResults) {
+      if (r.error) consecutiveErrors += 1
+      else consecutiveErrors = 0
+    }
+
     results.push(...batchResults)
     completed += batch.length
     if (typeof onProgress === 'function') {
       onProgress({ current: Math.min(completed, symbols.length), total: symbols.length })
+    }
+
+    // A run of failures this long isn't isolated bad luck — it's the
+    // shared rate limit rejecting the burst. Stop hammering it and back
+    // off hard so the limiter has room to reset before continuing,
+    // instead of racing through the remaining symbols and returning 27
+    // identical failures.
+    if (consecutiveErrors >= SYSTEMIC_ERROR_THRESHOLD && systemicBackoffs < MAX_SYSTEMIC_BACKOFFS) {
+      systemicBackoffs += 1
+      await sleep(6000)
+      consecutiveErrors = 0
+    } else if (i + batchSize < symbols.length) {
+      await sleep(BATCH_PAUSE_MS)
     }
   }
 
