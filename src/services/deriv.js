@@ -1,9 +1,23 @@
 import { ReconnectingSocket } from './websocket.js'
 import { GRANULARITY_MAP } from '../constants/timeframes.js'
 import { toDerivSymbol } from '../constants/markets.js'
-import { stripUnclosedCandle, genId } from '../utils/helpers.js'
+import { stripUnclosedCandle, genId, sleep } from '../utils/helpers.js'
 
-const DERIV_WS_URL = 'wss://ws.binaryws.com/websockets/v3?app_id=1089'
+// app_id=1089 is Deriv's SHARED PUBLIC DEMO app id — it's used by
+// countless unrelated tutorials and apps worldwide, and gets rate-
+// limited hard because of that shared load. Symptoms look exactly like
+// "no data available" on every symbol at once, even though the data
+// genuinely exists — it's a request-throttling failure, not a data gap.
+//
+// Register your own free app_id at https://api.deriv.com (Deriv account
+// -> Settings -> API Token / Register Application) and replace the
+// value below. A personal app_id gets its own rate-limit bucket instead
+// of sharing one with the entire internet.
+const DERIV_APP_ID = 1089
+const DERIV_WS_URL = `wss://ws.binaryws.com/websockets/v3?app_id=${DERIV_APP_ID}`
+
+const MAX_RETRIES = 3
+const RETRY_BASE_DELAY_MS = 1000
 
 class DerivService {
   constructor() {
@@ -29,10 +43,33 @@ class DerivService {
 
   /**
    * Fetch closed candles for a display symbol (e.g. 'VOL10').
-   * Translates to the real Deriv symbol internally and strips the
-   * still-forming last candle to prevent repainting.
+   * Translates to the real Deriv symbol internally, strips the
+   * still-forming last candle to prevent repainting, and retries with
+   * backoff on failure — a single dropped/rate-limited request should
+   * not silently show as "no data" when a retry would succeed.
    */
   async getCandles(displaySymbol, timeframe, count = 150) {
+    let lastError = 'unknown'
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const result = await this._getCandlesOnce(displaySymbol, timeframe, count)
+      if (!result.error) return result
+
+      lastError = result.error
+      // Not worth retrying if we're simply not connected — that needs
+      // a reconnect, not a request retry.
+      if (result.error === 'not_connected') break
+
+      if (attempt < MAX_RETRIES) {
+        const jitter = Math.random() * 300
+        await sleep(RETRY_BASE_DELAY_MS * (attempt + 1) + jitter)
+      }
+    }
+
+    return { candles: [], error: lastError }
+  }
+
+  async _getCandlesOnce(displaySymbol, timeframe, count) {
     const derivSymbol = toDerivSymbol(displaySymbol)
     const granularity = GRANULARITY_MAP[timeframe] || 60
     const reqId = genId('candles')
