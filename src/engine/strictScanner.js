@@ -4,6 +4,9 @@ import { analyzeForexMarket } from '../forex/forexEngine.js'
 import { analyzeSyntheticMarket } from '../synthetic/syntheticEngine.js'
 import { runMultiTimeframeAnalysis } from './multiTimeframeAnalyzer.js'
 import { resolveAgainstLock } from './signalLock.js'
+import { sleep } from '../utils/helpers.js'
+
+const BATCH_PAUSE_MS = 500
 
 const BIAS_TO_DIRECTION = { BULLISH: 'BUY', BEARISH: 'SELL' }
 
@@ -84,22 +87,39 @@ export async function scanSymbolStrict(symbol, entryTimeframe) {
   return { symbol, checkedTimeframe: entryTimeframe, ...resolution }
 }
 
-export async function scanAllSymbolsStrict(symbols = ALL_MARKETS, entryTimeframe, { onProgress, batchSize = 3 } = {}) {
+export async function scanAllSymbolsStrict(symbols = ALL_MARKETS, entryTimeframe, { onProgress, batchSize = 1 } = {}) {
   const results = []
   let completed = 0
+  let consecutiveErrors = 0
+  let systemicBackoffs = 0
+  const MAX_SYSTEMIC_BACKOFFS = 2
+  const SYSTEMIC_ERROR_THRESHOLD = 4
 
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize)
     const batchResults = await Promise.all(
       batch.map((s) => scanSymbolStrict(s, entryTimeframe).catch((err) => ({ symbol: s, action: 'ERROR', error: err.message, signal: null })))
     )
+
+    for (const r of batchResults) {
+      if (r.action === 'ERROR' || r.error) consecutiveErrors += 1
+      else consecutiveErrors = 0
+    }
+
     results.push(...batchResults)
     completed += batch.length
     if (typeof onProgress === 'function') {
       onProgress({ current: Math.min(completed, symbols.length), total: symbols.length })
     }
+
+    if (consecutiveErrors >= SYSTEMIC_ERROR_THRESHOLD && systemicBackoffs < MAX_SYSTEMIC_BACKOFFS) {
+      systemicBackoffs += 1
+      await sleep(7000)
+      consecutiveErrors = 0
+    } else if (i + batchSize < symbols.length) {
+      await sleep(BATCH_PAUSE_MS)
+    }
   }
 
   return results
 }
-
