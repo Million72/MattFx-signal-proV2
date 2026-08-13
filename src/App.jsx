@@ -70,7 +70,7 @@ function AppInner() {
   const { connectionStatus, isConnected, reconnect } = useMarketData()
   const {
     signals, scanning, progress, error, scan,
-    cooldownSeconds, liveCount, buyCount, sellCount, waitCount
+    cooldownSeconds, liveCount, buyCount, sellCount, waitCount, isSystemicFailure
   } = useSignalEngine(timeframe, isConnected)
 
   const {
@@ -149,6 +149,20 @@ function AppInner() {
                 borderRadius: 8, color: COLORS.sell, fontSize: 13
               }}>
                 {error}
+              </div>
+            )}
+
+            {isSystemicFailure && (
+              <div style={{
+                marginBottom: 16, padding: 14,
+                background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)',
+                borderRadius: 10, color: COLORS.warn, fontSize: 13
+              }}>
+                <strong>Deriv is rate-limiting requests right now</strong> — most symbols failed to
+                return data on this pass, which means the connection got throttled, not that the
+                market has no data. This is almost always caused by the shared demo <code>app_id=1089</code>.
+                It should recover on its own (the scanner already backs off automatically), but for a
+                permanent fix, register your own free app_id at api.deriv.com — see the README.
               </div>
             )}
 
@@ -237,4 +251,3 @@ export default function App() {
     </ErrorBoundary>
   )
 }
-
