@@ -1,26 +1,41 @@
 import { ReconnectingSocket } from './websocket.js'
 import { GRANULARITY_MAP } from '../constants/timeframes.js'
 import { toDerivSymbol } from '../constants/markets.js'
-import { stripUnclosedCandle, genId, sleep } from '../utils/helpers.js'
+import { stripUnclosedCandle, sleep } from '../utils/helpers.js'
 
-// Deriv's current official WebSocket endpoint is ws.derivws.com — this
-// project previously pointed at ws.binaryws.com, the older Binary.com
-// domain from before Deriv's rebrand. That stale endpoint can fail
-// consistently (not just under load), which looks identical to rate-
-// limiting but doesn't recover with retries/backoff the way real
-// throttling does. This is the corrected, current endpoint.
+// Deriv retired the legacy WebSocket API (ws.derivws.com/websockets/v3
+// and the numeric app_id system) entirely. This connects to their
+// CURRENT public market-data endpoint instead, confirmed directly
+// against Deriv's own published schema at developers.deriv.com:
 //
-// TEMPORARY DIAGNOSTIC: reverted to the shared demo app_id (1089) with
-// the corrected ws.derivws.com endpoint, to isolate whether the new
-// custom app_id specifically is what broke the connection. If this
-// version connects successfully, the endpoint fix was correct and the
-// custom app_id needs troubleshooting. If this STILL shows
-// "Disconnected," the problem is unrelated to either app_id.
-const DERIV_APP_ID = 1089
-const DERIV_WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${DERIV_APP_ID}`
+//   wss://api.derivws.com/trading/v1/options/ws/public
+//
+// Confirmed differences from the old legacy protocol that this file
+// accounts for:
+//   - No app_id / auth required for this public channel at all — this
+//     removes the shared-rate-limit problem at its root rather than
+//     just working around it (no more sharing one bucket with every
+//     other app on the internet).
+//   - req_id must be a JSON *integer*, not a string. The old code used
+//     string IDs like "candles_VOL10_...", which the new API's schema
+//     rejects outright.
+//   - `echo_req` in the response is no longer guaranteed to be present.
+//     The old code matched responses to requests by checking
+//     echo_req.ticks_history/granularity — that check is removed here;
+//     matching now relies purely on req_id-based listener routing,
+//     which is correct and doesn't need echo_req at all.
+//   - Candle field names (open/high/low/close/epoch) are unchanged.
+const DERIV_WS_URL = 'wss://api.derivws.com/trading/v1/options/ws/public'
 
 const MAX_RETRIES = 3
 const RETRY_BASE_DELAY_MS = 1000
+
+// Sequential integer req_id generator, as the new API's schema requires.
+let reqIdCounter = 1
+function nextReqId() {
+  reqIdCounter += 1
+  return reqIdCounter
+}
 
 class DerivService {
   constructor() {
@@ -48,8 +63,7 @@ class DerivService {
    * Fetch closed candles for a display symbol (e.g. 'VOL10').
    * Translates to the real Deriv symbol internally, strips the
    * still-forming last candle to prevent repainting, and retries with
-   * backoff on failure — a single dropped/rate-limited request should
-   * not silently show as "no data" when a retry would succeed.
+   * backoff on failure.
    */
   async getCandles(displaySymbol, timeframe, count = 150) {
     let lastError = 'unknown'
@@ -59,8 +73,6 @@ class DerivService {
       if (!result.error) return result
 
       lastError = result.error
-      // Not worth retrying if we're simply not connected — that needs
-      // a reconnect, not a request retry.
       if (result.error === 'not_connected') break
 
       if (attempt < MAX_RETRIES) {
@@ -75,15 +87,25 @@ class DerivService {
   async _getCandlesOnce(displaySymbol, timeframe, count) {
     const derivSymbol = toDerivSymbol(displaySymbol)
     const granularity = GRANULARITY_MAP[timeframe] || 60
-    const reqId = genId('candles')
+    const reqId = nextReqId()
 
     return new Promise((resolve) => {
+      // Because this listener is added and removed per unique req_id,
+      // any response that reaches this handler IS the response to this
+      // exact request — no need to double-check echo_req, which the
+      // new API doesn't guarantee will even be present.
       const handler = (data) => {
         this.socket.removeListener(reqId, handler)
 
         if (data.error) {
           console.error(`Deriv error for ${displaySymbol} (${derivSymbol}):`, data.error.message)
           resolve({ candles: [], error: data.error.message })
+          return
+        }
+
+        if (data.errors && data.errors.length > 0) {
+          console.error(`Deriv validation error for ${displaySymbol}:`, data.errors[0].message)
+          resolve({ candles: [], error: data.errors[0].message })
           return
         }
 
@@ -133,12 +155,12 @@ class DerivService {
    */
   async getCurrentPrice(displaySymbol) {
     const derivSymbol = toDerivSymbol(displaySymbol)
-    const reqId = genId('tick')
+    const reqId = nextReqId()
 
     return new Promise((resolve) => {
       const handler = (data) => {
         this.socket.removeListener(reqId, handler)
-        if (data.error || !data.tick) {
+        if (data.error || data.errors || !data.tick) {
           resolve(null)
           return
         }
