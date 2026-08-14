@@ -10,11 +10,13 @@ import { stripUnclosedCandle, genId, sleep } from '../utils/helpers.js'
 // limiting but doesn't recover with retries/backoff the way real
 // throttling does. This is the corrected, current endpoint.
 //
-// app_id below is your registered "MattFx signal proV2" app on Deriv —
-// no longer the shared public demo id. This gives your requests their
-// own dedicated rate-limit bucket instead of sharing 1089 with every
-// other app on the internet.
-const DERIV_APP_ID = '346FVETnQPomWGtjKqK2T'
+// TEMPORARY DIAGNOSTIC: reverted to the shared demo app_id (1089) with
+// the corrected ws.derivws.com endpoint, to isolate whether the new
+// custom app_id specifically is what broke the connection. If this
+// version connects successfully, the endpoint fix was correct and the
+// custom app_id needs troubleshooting. If this STILL shows
+// "Disconnected," the problem is unrelated to either app_id.
+const DERIV_APP_ID = 1089
 const DERIV_WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${DERIV_APP_ID}`
 
 const MAX_RETRIES = 3
