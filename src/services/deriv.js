@@ -10,13 +10,11 @@ import { stripUnclosedCandle, genId, sleep } from '../utils/helpers.js'
 // limiting but doesn't recover with retries/backoff the way real
 // throttling does. This is the corrected, current endpoint.
 //
-// app_id=1089 is Deriv's SHARED PUBLIC DEMO app id — it's used by
-// countless unrelated tutorials and apps worldwide, and can still get
-// rate-limited under real load even on the correct endpoint. Register
-// your own free app_id at https://api.deriv.com (Deriv account ->
-// Settings -> API Token / Register Application) and replace the value
-// below for a dedicated rate-limit bucket.
-const DERIV_APP_ID = 346FVETnQPomWGtjKqK2T
+// app_id below is your registered "MattFx signal proV2" app on Deriv —
+// no longer the shared public demo id. This gives your requests their
+// own dedicated rate-limit bucket instead of sharing 1089 with every
+// other app on the internet.
+const DERIV_APP_ID = '346FVETnQPomWGtjKqK2T'
 const DERIV_WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${DERIV_APP_ID}`
 
 const MAX_RETRIES = 3
